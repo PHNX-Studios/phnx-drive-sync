@@ -1,0 +1,194 @@
+using Proton.Drive.Sdk.Api.Links;
+using Proton.Drive.Sdk.Api.Shares;
+using Proton.Drive.Sdk.Api.Volumes;
+using Proton.Drive.Sdk.Serialization;
+using Proton.Drive.Sdk.Volumes;
+using Proton.Sdk.Api;
+using Proton.Sdk.Api.Http;
+
+namespace Proton.Drive.Sdk.Api.Photos;
+
+internal sealed class PhotosApiClient(HttpClient httpClient) : IPhotosApiClient
+{
+    private readonly HttpClient _httpClient = httpClient;
+
+    public async ValueTask<VolumeCreationResponse> CreateVolumeAsync(PhotosVolumeCreationRequest request, CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting(DriveApiSerializerContext.Default.VolumeCreationResponse)
+            .PostAsync("photos/volumes", request, PhotosApiSerializerContext.Default.PhotosVolumeCreationRequest, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<ShareResponseV2> GetRootShareAsync(CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting(DriveApiSerializerContext.Default.ShareResponseV2)
+            .GetAsync("v2/shares/photos", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<TimelinePhotoListResponse> GetTimelinePhotosAsync(TimelinePhotoListRequest request, CancellationToken cancellationToken)
+    {
+        var query = request.PreviousPageLastLinkId is not null ? $"?PreviousPageLastLinkID={request.PreviousPageLastLinkId}" : string.Empty;
+
+        return await _httpClient
+            .Expecting(PhotosApiSerializerContext.Default.TimelinePhotoListResponse)
+            .GetAsync($"volumes/{request.VolumeId}/photos{query}", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<AlbumListResponse> GetAlbumsAsync(VolumeId volumeId, LinkId? anchorId, CancellationToken cancellationToken)
+    {
+        var query = anchorId is not null ? $"?AnchorID={anchorId}" : string.Empty;
+
+        return await _httpClient
+            .Expecting(PhotosApiSerializerContext.Default.AlbumListResponse)
+            .GetAsync($"photos/volumes/{volumeId}/albums{query}", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<AlbumItemListResponse> GetAlbumItemsAsync(
+        VolumeId volumeId,
+        LinkId albumLinkId,
+        LinkId? anchorId,
+        CancellationToken cancellationToken)
+    {
+        var anchor = anchorId is not null ? $"&AnchorID={anchorId}" : string.Empty;
+
+        return await _httpClient
+            .Expecting(PhotosApiSerializerContext.Default.AlbumItemListResponse)
+            .GetAsync($"photos/volumes/{volumeId}/albums/{albumLinkId}/children?Sort=Captured&Desc=1{anchor}", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<SharedAlbumsResponse> GetSharedAlbumsAsync(LinkId? anchorId, CancellationToken cancellationToken)
+    {
+        var queryParameters = anchorId is not null ? $"?AnchorID={anchorId}" : string.Empty;
+
+        return await _httpClient
+            .Expecting(DriveApiSerializerContext.Default.SharedAlbumsResponse)
+            .GetAsync($"photos/albums/shared-with-me{queryParameters}", cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<LinkDetailsResponse> GetDetailsAsync(VolumeId volumeId, IEnumerable<LinkId> linkIds, CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting(DriveApiSerializerContext.Default.LinkDetailsResponse)
+            .PostAsync(
+                $"photos/volumes/{volumeId}/links",
+                new LinkDetailsRequest(linkIds),
+                DriveApiSerializerContext.Default.LinkDetailsRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<FindDuplicatesResponse> FindDuplicatesAsync(
+        VolumeId volumeId,
+        IReadOnlyList<ReadOnlyMemory<byte>> nameHashes,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting(PhotosApiSerializerContext.Default.FindDuplicatesResponse)
+            .PostAsync(
+                $"volumes/{volumeId}/photos/duplicates",
+                new FindDuplicatesRequest { NameHashes = nameHashes },
+                PhotosApiSerializerContext.Default.FindDuplicatesRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<ApiResponse> AddPhotoTagsAsync(
+        VolumeId volumeId,
+        LinkId linkId,
+        IReadOnlyList<int> tags,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting<ApiResponse>(DriveApiSerializerContext.Default.ApiResponse)
+            .PostAsync(
+                $"photos/volumes/{volumeId}/links/{linkId}/tags",
+                new PhotoTagsRequest { Tags = tags },
+                PhotosApiSerializerContext.Default.PhotoTagsRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<ApiResponse> RemovePhotoTagsAsync(
+        VolumeId volumeId,
+        LinkId linkId,
+        IReadOnlyList<int> tags,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting<ApiResponse>(DriveApiSerializerContext.Default.ApiResponse)
+            .DeleteAsync(
+                $"photos/volumes/{volumeId}/links/{linkId}/tags",
+                new PhotoTagsRequest { Tags = tags },
+                PhotosApiSerializerContext.Default.PhotoTagsRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<ApiResponse> SetPhotoFavoriteAsync(VolumeId volumeId, LinkId linkId, CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting<ApiResponse>(DriveApiSerializerContext.Default.ApiResponse)
+            .PostAsync($"photos/volumes/{volumeId}/links/{linkId}/favorite", cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<ApiResponse> SetPhotoFavoriteAsync(
+        VolumeId volumeId,
+        LinkId linkId,
+        FavoritePhotoRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting<ApiResponse>(DriveApiSerializerContext.Default.ApiResponse)
+            .PostAsync(
+                $"photos/volumes/{volumeId}/links/{linkId}/favorite",
+                request,
+                PhotosApiSerializerContext.Default.FavoritePhotoRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<AggregateApiResponse<TransferPhotoResponsePair>> TransferPhotosAsync(
+        VolumeId volumeId,
+        TransferPhotosRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting(PhotosApiSerializerContext.Default.AggregateApiResponseTransferPhotoResponsePair)
+            .PutAsync(
+                $"photos/volumes/{volumeId}/links/transfer-multiple",
+                request,
+                PhotosApiSerializerContext.Default.TransferPhotosRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask<CopyPhotoResponse> CopyPhotoAsync(
+        VolumeId sourceVolumeId,
+        LinkId sourceLinkId,
+        CopyPhotoRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting(PhotosApiSerializerContext.Default.CopyPhotoResponse, PhotosApiSerializerContext.Default.CopyPhotoFailureResponse)
+            .PostAsync(
+                $"volumes/{sourceVolumeId}/links/{sourceLinkId}/copy",
+                request,
+                PhotosApiSerializerContext.Default.CopyPhotoRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask ReportRecentlyAccessedAsync(ReportRecentlyAccessedItemsRequest request, CancellationToken cancellationToken)
+    {
+        await _httpClient
+            .Expecting(DriveApiSerializerContext.Default.ApiResponse)
+            .PostAsync(
+                "photos/recently-accessed-items",
+                request,
+                DriveApiSerializerContext.Default.ReportRecentlyAccessedItemsRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+}

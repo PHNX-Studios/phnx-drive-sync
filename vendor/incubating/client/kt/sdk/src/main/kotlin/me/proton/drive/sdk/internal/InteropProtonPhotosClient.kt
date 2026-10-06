@@ -1,0 +1,447 @@
+package me.proton.drive.sdk.internal
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import me.proton.drive.sdk.Downloader
+import me.proton.drive.sdk.LoggerProvider
+import me.proton.drive.sdk.LoggerProvider.Level.DEBUG
+import me.proton.drive.sdk.LoggerProvider.Level.INFO
+import me.proton.drive.sdk.PhotosDownloader
+import me.proton.drive.sdk.PhotosUploader
+import me.proton.drive.sdk.ProtonPhotosClient
+import me.proton.drive.sdk.SdkNode
+import me.proton.drive.sdk.Uploader
+import me.proton.drive.sdk.entity.AlbumItem
+import me.proton.drive.sdk.entity.DriveEvent
+import me.proton.drive.sdk.entity.DriveEventId
+import me.proton.drive.sdk.entity.FileThumbnail
+import me.proton.drive.sdk.entity.Node
+import me.proton.drive.sdk.entity.NodeResultPair
+import me.proton.drive.sdk.entity.NodeUid
+import me.proton.drive.sdk.entity.RecentlyAccessedReportItem
+import me.proton.drive.sdk.extension.toTimestamp
+import me.proton.drive.sdk.entity.PhotoTagsUpdate
+import me.proton.drive.sdk.entity.PhotosDownloaderRequest
+import me.proton.drive.sdk.entity.PhotosTimelineItem
+import me.proton.drive.sdk.entity.PhotosUploaderRequest
+import me.proton.drive.sdk.entity.ScopeId
+import me.proton.drive.sdk.entity.ThumbnailType
+import me.proton.drive.sdk.extension.toEntity
+import me.proton.drive.sdk.extension.toProto
+import proton.drive.sdk.drivePhotosClientDeleteNodesRequest
+import proton.drive.sdk.drivePhotosClientEmptyTrashRequest
+import proton.drive.sdk.drivePhotosClientEnumerateAlbumNodeUidsRequest
+import proton.drive.sdk.drivePhotosClientEnumerateAlbumRequest
+import proton.drive.sdk.drivePhotosClientEnumerateEventsRequest
+import proton.drive.sdk.drivePhotosClientEnumerateNodesRequest
+import proton.drive.sdk.drivePhotosClientEnumerateSharedNodeUidsRequest
+import proton.drive.sdk.drivePhotosClientEnumerateSharedWithMeNodeUidsRequest
+import proton.drive.sdk.drivePhotosClientEnumerateThumbnailsRequest
+import proton.drive.sdk.drivePhotosClientEnumerateTimelineRequest
+import proton.drive.sdk.drivePhotosClientEnumerateTrashRequest
+import proton.drive.sdk.drivePhotosClientGetNodeRequest
+import proton.drive.sdk.drivePhotosClientLeaveSharedNodeRequest
+import proton.drive.sdk.drivePhotosClientReportRecentlyAccessedRequest
+import proton.drive.sdk.drivePhotosClientRestoreNodesRequest
+import proton.drive.sdk.drivePhotosClientSavePhotosToTimelineRequest
+import proton.drive.sdk.drivePhotosClientTrashNodesRequest
+import proton.drive.sdk.recentlyAccessedReportItem
+import proton.drive.sdk.drivePhotosClientUpdatePhotosRequest
+
+internal class InteropProtonPhotosClient internal constructor(
+    internal val handle: Long,
+    private val bridge: JniProtonPhotosClient,
+    private val clientScope: CoroutineScope,
+) : SdkNode(null), ProtonPhotosClient {
+
+    override fun enumerateThumbnails(
+        nodeUids: List<NodeUid>,
+        type: ThumbnailType,
+    ): Flow<FileThumbnail> = channelFlow {
+        log(INFO, "enumerateThumbnails(${nodeUids.size}, $type)")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateThumbnails(
+                coroutineScope = this@channelFlow,
+                request = drivePhotosClientEnumerateThumbnailsRequest {
+                    this.photoUids += nodeUids.map { it.value }
+                    this.type = type.toProto()
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { fileThumbnail ->
+                    send(fileThumbnail.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun enumerateEvents(
+        scopeId: ScopeId,
+        cursorEventId: DriveEventId?,
+    ): Flow<DriveEvent> = channelFlow {
+        log(DEBUG, "enumerateEvents")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateEvents(
+                coroutineScope = this@channelFlow,
+                request = drivePhotosClientEnumerateEventsRequest {
+                    this.treeEventScopeId = scopeId.id
+                    cursorEventId?.let { this.cursorEventId = it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { event ->
+                    send(event.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun enumerateTimeline(): Flow<PhotosTimelineItem> = channelFlow {
+        log(DEBUG, "enumerateTimeline")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateTimeline(
+                coroutineScope = this@channelFlow,
+                request = drivePhotosClientEnumerateTimelineRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { timelineItem ->
+                    send(timelineItem.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun enumerateAlbumNodeUids(): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateAlbumNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateAlbumNodeUids(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientEnumerateAlbumNodeUidsRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override fun enumerateAlbum(albumUid: NodeUid): Flow<AlbumItem> = channelFlow {
+        log(DEBUG, "enumerateAlbum")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateAlbum(
+                coroutineScope = this@channelFlow,
+                request = drivePhotosClientEnumerateAlbumRequest {
+                    this.albumUid = albumUid.value
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { albumItem ->
+                    send(albumItem.toEntity())
+                }
+            )
+        }
+    }
+
+    override suspend fun getNode(
+        nodeUid: NodeUid,
+    ): Node? = cancellationCoroutineScope { source ->
+        log(DEBUG, "getNode")
+        bridge.getNode(
+            drivePhotosClientGetNodeRequest {
+                this.nodeUid = nodeUid.value
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )?.toEntity()
+    }
+
+    override fun trashNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "trashNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.trashNodes(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientTrashNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun deleteNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "deleteNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.deleteNodes(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientDeleteNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun restoreNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "restoreNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.restoreNodes(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientRestoreNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun updatePhotos(
+        updates: List<PhotoTagsUpdate>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "updatePhotos(${updates.size} photos)")
+        cancellationCoroutineScope { source ->
+            bridge.updatePhotos(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientUpdatePhotosRequest {
+                    this.updates += updates.map { it.toProto() }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun savePhotosToTimeline(
+        photoUids: List<NodeUid>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "savePhotosToTimeline(${photoUids.size} photos)")
+        cancellationCoroutineScope { source ->
+            bridge.savePhotosToTimeline(
+                coroutineScope = this@channelFlow,
+                request = drivePhotosClientSavePhotosToTimelineRequest {
+                    this.photoUids += photoUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun enumerateNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<Node> = channelFlow {
+        log(INFO, "enumerateNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateNodes(
+                coroutineScope = this@channelFlow,
+                request = drivePhotosClientEnumerateNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { node ->
+                    send(node.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun enumerateTrashNodeUids(): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateTrashNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateTrashNodeUids(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientEnumerateTrashRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override suspend fun emptyTrash(): Unit = cancellationCoroutineScope { source ->
+        log(INFO, "emptyTrash")
+        bridge.emptyTrash(
+            drivePhotosClientEmptyTrashRequest {
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )
+    }
+
+    override fun enumerateSharedNodeUids(): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateSharedNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateSharedNodeUids(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientEnumerateSharedNodeUidsRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override fun enumerateSharedWithMeNodeUids(): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateSharedWithMeNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateSharedWithMeNodeUids(
+                coroutineScope = this@channelFlow,
+                drivePhotosClientEnumerateSharedWithMeNodeUidsRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override suspend fun leaveSharedNode(
+        nodeUid: NodeUid,
+    ): Unit = cancellationCoroutineScope { source ->
+        log(INFO, "leaveSharedNode")
+        bridge.leaveSharedNode(
+            drivePhotosClientLeaveSharedNodeRequest {
+                this.nodeUid = nodeUid.value
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )
+    }
+
+    override suspend fun reportRecentlyAccessed(items: List<RecentlyAccessedReportItem>): Unit =
+        cancellationCoroutineScope { source ->
+            log(DEBUG, "reportRecentlyAccessed(${items.size})")
+            bridge.reportRecentlyAccessed(
+                drivePhotosClientReportRecentlyAccessedRequest {
+                    this.items += items.map { item ->
+                        recentlyAccessedReportItem {
+                            nodeUid = item.nodeUid.value
+                            item.accessTime?.toTimestamp()?.let { accessTime = it }
+                        }
+                    }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                }
+            )
+        }
+
+    override suspend fun downloader(
+        request: PhotosDownloaderRequest,
+    ): Downloader {
+        log(INFO, "downloader")
+        return ownedCancellationTokenSource { source ->
+            factory(JniPhotosDownloader()) {
+                PhotosDownloader(
+                    client = this@InteropProtonPhotosClient,
+                    handle = getPhotoDownloader(
+                        clientHandle = handle,
+                        cancellationTokenSourceHandle = source.handle,
+                        request = request,
+                    ),
+                    bridge = this,
+                    cancellationTokenSource = source,
+                )
+            }
+        }
+    }
+
+    override suspend fun uploader(
+        request: PhotosUploaderRequest,
+    ): Uploader {
+        log(INFO, "photosUploader")
+        return ownedCancellationTokenSource { source ->
+            JniPhotosUploader().run {
+                PhotosUploader(
+                    client = this@InteropProtonPhotosClient,
+                    handle = getPhotoUploader(
+                        clientHandle = handle,
+                        cancellationTokenSourceHandle = source.handle,
+                        request = request,
+                    ),
+                    bridge = this,
+                    cancellationTokenSource = source,
+                )
+            }
+        }
+    }
+
+    override suspend fun findPhotoDuplicates(
+        name: String,
+        generateSha1: suspend () -> ByteArray,
+    ): List<NodeUid> = coroutineScope {
+        val scope = this
+        cancellationCoroutineScope { source ->
+            log(INFO, "findPhotoDuplicates")
+            bridge.findPhotoDuplicates(
+                name = name,
+                clientHandle = handle,
+                cancellationTokenSourceHandle = source.handle,
+                sha1Provider = generateSha1,
+                coroutineScopeProvider = { scope },
+            ).map { NodeUid(it) }
+        }
+    }
+
+    override fun close() {
+        log(DEBUG, "close")
+        bridge.free(handle)
+        clientScope.cancel()
+        super.close()
+    }
+
+    private fun log(level: LoggerProvider.Level, message: String) {
+        bridge.clientLogger(level, "ProtonPhotosClient(${handle.toLogId()}) $message")
+    }
+}

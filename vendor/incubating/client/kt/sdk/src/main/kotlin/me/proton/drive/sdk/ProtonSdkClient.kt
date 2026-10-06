@@ -1,0 +1,23 @@
+package me.proton.drive.sdk
+
+import kotlinx.coroutines.flow.Flow
+import me.proton.drive.sdk.entity.FileThumbnail
+import me.proton.drive.sdk.entity.Node
+import me.proton.drive.sdk.entity.NodeResultPair
+import me.proton.drive.sdk.entity.NodeUid
+import me.proton.drive.sdk.entity.RecentlyAccessedReportItem
+import me.proton.drive.sdk.entity.ThumbnailType
+
+interface ProtonSdkClient : AutoCloseable {
+    fun enumerateThumbnails(nodeUids: List<NodeUid>, type: ThumbnailType): Flow<FileThumbnail>
+    suspend fun getNode(nodeUid: NodeUid): Node?
+    fun trashNodes(nodeUids: List<NodeUid>): Flow<NodeResultPair>
+    fun deleteNodes(nodeUids: List<NodeUid>): Flow<NodeResultPair>
+    fun restoreNodes(nodeUids: List<NodeUid>): Flow<NodeResultPair>
+    fun enumerateTrashNodeUids(): Flow<NodeUid>
+    suspend fun emptyTrash()
+    fun enumerateSharedNodeUids(): Flow<NodeUid>
+    suspend fun leaveSharedNode(nodeUid: NodeUid)
+    suspend fun reportRecentlyAccessed(items: List<RecentlyAccessedReportItem>)
+    fun enumerateNodes(nodeUids: List<NodeUid>): Flow<Node>
+}

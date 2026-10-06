@@ -1,0 +1,67 @@
+using Proton.Drive.Sdk.Api.Files;
+using Proton.Drive.Sdk.Api.Links;
+using Proton.Drive.Sdk.Serialization;
+using Proton.Drive.Sdk.Volumes;
+using Proton.Sdk.Api;
+using Proton.Sdk.Api.Http;
+
+namespace Proton.Drive.Sdk.Api.Photos;
+
+internal sealed class PhotosLinksApiClient(HttpClient httpClient) : ILinksApiClient
+{
+    private readonly HttpClient _httpClient = httpClient;
+
+    private readonly LinksApiClient _driveImplementation = new(httpClient);
+
+    public async ValueTask<LinkDetailsResponse> GetDetailsAsync(VolumeId volumeId, IEnumerable<LinkId> linkIds, CancellationToken cancellationToken)
+    {
+        return await _httpClient
+            .Expecting(DriveApiSerializerContext.Default.LinkDetailsResponse)
+            .PostAsync(
+                $"photos/volumes/{volumeId}/links",
+                new LinkDetailsRequest(linkIds),
+                DriveApiSerializerContext.Default.LinkDetailsRequest,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public ValueTask<ContextShareResponse> GetContextShareAsync(VolumeId volumeId, LinkId linkId, CancellationToken cancellationToken)
+    {
+        return _driveImplementation.GetContextShareAsync(volumeId, linkId, cancellationToken);
+    }
+
+    public ValueTask<AggregateApiResponse<LinkIdResponsePair<DetailedApiResponse>>> MoveMultipleAsync(
+        VolumeId volumeId,
+        MoveMultipleLinksRequest request,
+        CancellationToken cancellationToken)
+    {
+        return _driveImplementation.MoveMultipleAsync(volumeId, request, cancellationToken);
+    }
+
+    public ValueTask<ApiResponse> RenameAsync(VolumeId volumeId, LinkId linkId, RenameLinkRequest request, CancellationToken cancellationToken)
+    {
+        return _driveImplementation.RenameAsync(volumeId, linkId, request, cancellationToken);
+    }
+
+    public ValueTask<AggregateApiResponse<LinkIdResponsePair<ApiResponse>>> DeleteMultipleAsync(
+        VolumeId volumeId,
+        IEnumerable<LinkId> linkIds,
+        CancellationToken cancellationToken)
+    {
+        return _driveImplementation.DeleteMultipleAsync(volumeId, linkIds, cancellationToken);
+    }
+
+    public ValueTask<NodeNameAvailabilityResponse> GetAvailableNames(
+        VolumeId volumeId,
+        LinkId folderId,
+        NodeNameAvailabilityRequest request,
+        CancellationToken cancellationToken)
+    {
+        return _driveImplementation.GetAvailableNames(volumeId, folderId, request, cancellationToken);
+    }
+
+    public ValueTask ReportRecentlyAccessedAsync(ReportRecentlyAccessedItemsRequest request, CancellationToken cancellationToken)
+    {
+        return _driveImplementation.ReportRecentlyAccessedAsync(request, cancellationToken);
+    }
+}

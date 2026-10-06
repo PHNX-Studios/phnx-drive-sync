@@ -1,0 +1,72 @@
+package me.proton.drive.sdk
+
+import kotlinx.coroutines.CoroutineScope
+import me.proton.drive.sdk.LoggerProvider.Level.DEBUG
+import me.proton.drive.sdk.LoggerProvider.Level.INFO
+import me.proton.drive.sdk.entity.ThumbnailType
+import me.proton.drive.sdk.extension.toEntity
+import me.proton.drive.sdk.extension.toPercentageString
+import me.proton.drive.sdk.internal.JniFileUploader
+import me.proton.drive.sdk.internal.JniUploadController
+import me.proton.drive.sdk.internal.ownedCancellationTokenSource
+import me.proton.drive.sdk.internal.toLogId
+import java.nio.channels.ReadableByteChannel
+import java.util.concurrent.atomic.AtomicReference
+
+class FileUploader internal constructor(
+    client: SdkNode,
+    internal val handle: Long,
+    private val bridge: JniFileUploader,
+    override val cancellationTokenSource: CancellationTokenSource,
+) : SdkNode(client), Uploader {
+
+    override suspend fun uploadFromStream(
+        coroutineScope: CoroutineScope,
+        channel: ReadableByteChannel,
+        thumbnails: Map<ThumbnailType, ByteArray>,
+        sha1Provider: (() -> ByteArray)?,
+    ): UploadController = ownedCancellationTokenSource { source ->
+        log(INFO, "uploadFromStream")
+        val coroutineScopeReference = AtomicReference(coroutineScope)
+        val controllerReference = AtomicReference<CommonUploadController>()
+        val handle = bridge.uploadFromStream(
+            uploaderHandle = handle,
+            cancellationTokenSourceHandle = source.handle,
+            thumbnails = thumbnails,
+            onRead = channel::read,
+            onDispose = channel::close,
+            onProgress = { progressUpdate ->
+                with(progressUpdate) {
+                    log(DEBUG, "progress: ${progressUpdate.toPercentageString()}")
+                    controllerReference.get()?.emitProgress(toEntity())
+                }
+            },
+            sha1Provider = sha1Provider,
+            coroutineScopeProvider = coroutineScopeReference::get,
+        )
+        CommonUploadController(
+            uploader = this@FileUploader,
+            handle = handle,
+            bridge = JniUploadController(),
+            cancellationTokenSource = source,
+            coroutineScopeConsumer = coroutineScopeReference::set,
+        ).also(controllerReference::set)
+    }
+
+    override fun close() {
+        log(DEBUG, "close")
+        bridge.free(handle)
+        cancellationTokenSource.close()
+        super.close()
+    }
+
+    override suspend fun cancel() {
+        log(INFO, "cancel")
+        super.cancel()
+    }
+
+    private fun log(level: LoggerProvider.Level, message: String) {
+        bridge.clientLogger(level, "FileUploader(${handle.toLogId()}) $message")
+    }
+}
+

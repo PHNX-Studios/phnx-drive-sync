@@ -1,0 +1,518 @@
+package me.proton.drive.sdk.internal
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import me.proton.drive.sdk.Downloader
+import me.proton.drive.sdk.FileDownloader
+import me.proton.drive.sdk.FileUploader
+import me.proton.drive.sdk.LoggerProvider
+import me.proton.drive.sdk.LoggerProvider.Level.DEBUG
+import me.proton.drive.sdk.LoggerProvider.Level.INFO
+import me.proton.drive.sdk.ProtonDriveClient
+import me.proton.drive.sdk.SdkNode
+import me.proton.drive.sdk.Uploader
+import me.proton.drive.sdk.entity.Device
+import me.proton.drive.sdk.entity.DeviceType
+import me.proton.drive.sdk.entity.DeviceUid
+import me.proton.drive.sdk.entity.DriveEvent
+import me.proton.drive.sdk.entity.DriveEventId
+import me.proton.drive.sdk.entity.FileDownloaderRequest
+import me.proton.drive.sdk.entity.FileRevisionUploaderRequest
+import me.proton.drive.sdk.entity.FileThumbnail
+import me.proton.drive.sdk.entity.FileUploaderRequest
+import me.proton.drive.sdk.entity.FolderNode
+import me.proton.drive.sdk.entity.Node
+import me.proton.drive.sdk.entity.NodeMoveItem
+import me.proton.drive.sdk.entity.NodeResultPair
+import me.proton.drive.sdk.entity.NodeUid
+import me.proton.drive.sdk.entity.RecentlyAccessedReportItem
+import me.proton.drive.sdk.entity.ScopeId
+import me.proton.drive.sdk.entity.ThumbnailType
+import me.proton.drive.sdk.extension.toEntity
+import me.proton.drive.sdk.extension.toProto
+import me.proton.drive.sdk.extension.toTimestamp
+import proton.drive.sdk.driveClientCreateDeviceRequest
+import proton.drive.sdk.driveClientCreateFolderRequest
+import proton.drive.sdk.driveClientDeleteDeviceRequest
+import proton.drive.sdk.driveClientDeleteNodesRequest
+import proton.drive.sdk.driveClientEmptyTrashRequest
+import proton.drive.sdk.driveClientEnumerateDevicesRequest
+import proton.drive.sdk.driveClientEnumerateEventsRequest
+import proton.drive.sdk.driveClientEnumerateFolderChildrenRequest
+import proton.drive.sdk.driveClientEnumerateNodesRequest
+import proton.drive.sdk.driveClientEnumerateSharedNodeUidsRequest
+import proton.drive.sdk.driveClientEnumerateSharedWithMeNodeUidsRequest
+import proton.drive.sdk.driveClientEnumerateThumbnailsRequest
+import proton.drive.sdk.driveClientEnumerateTrashRequest
+import proton.drive.sdk.driveClientGetAvailableNameRequest
+import proton.drive.sdk.driveClientGetMyFilesFolderRequest
+import proton.drive.sdk.driveClientGetNodeRequest
+import proton.drive.sdk.driveClientLeaveSharedNodeRequest
+import proton.drive.sdk.driveClientMoveNodesRequest
+import proton.drive.sdk.driveClientReportRecentlyAccessedRequest
+import proton.drive.sdk.recentlyAccessedReportItem
+import proton.drive.sdk.driveClientRenameDeviceRequest
+import proton.drive.sdk.nodeMoveItem
+import proton.drive.sdk.driveClientRestoreNodesRequest
+import proton.drive.sdk.driveClientTrashNodesRequest
+import java.time.Instant
+
+internal class InteropProtonDriveClient internal constructor(
+    internal val handle: Long,
+    private val bridge: JniProtonDriveClient,
+    private val clientScope: CoroutineScope,
+) : SdkNode(null), ProtonDriveClient {
+
+    override suspend fun getAvailableName(
+        parentFolderUid: NodeUid,
+        name: String,
+    ): String = cancellationCoroutineScope { source ->
+        log(DEBUG, "getAvailableName")
+        bridge.getAvailableName(
+            driveClientGetAvailableNameRequest {
+                this.parentFolderUid = parentFolderUid.value
+                this.name = name
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )
+    }
+
+    override fun enumerateThumbnails(
+        nodeUids: List<NodeUid>,
+        type: ThumbnailType,
+    ): Flow<FileThumbnail> = channelFlow {
+        log(INFO, "enumerateThumbnails(${nodeUids.size}, $type)")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateThumbnails(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateThumbnailsRequest {
+                    this.fileUids += nodeUids.map { it.value }
+                    this.type = type.toProto()
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { fileThumbnail ->
+                    send(fileThumbnail.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun moveNodes(
+        items: List<NodeMoveItem>,
+        targetParentFolderUid: NodeUid,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "moveNodes(${items.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.moveNodes(
+                coroutineScope = this@channelFlow,
+                driveClientMoveNodesRequest {
+                    this.items += items.map { item ->
+                        nodeMoveItem {
+                            nodeUid = item.nodeUid.value
+                            currentParentUid = item.currentParentUid.value
+                            currentName = item.currentName
+                            targetName = item.targetName
+                            item.newMediaType?.let { newMediaType = it }
+                        }
+                    }
+                    this.targetParentFolderUid = targetParentFolderUid.value
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override suspend fun createFolder(
+        parentFolderUid: NodeUid,
+        name: String,
+        lastModificationTime: Instant?,
+    ): FolderNode = cancellationCoroutineScope { source ->
+        log(INFO, "createFolder")
+        bridge.createFolder(
+            driveClientCreateFolderRequest {
+                this.parentFolderUid = parentFolderUid.value
+                folderName = name
+                lastModificationTime?.toTimestamp()?.let { this.lastModificationTime = it }
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        ).toEntity()
+    }
+
+    override suspend fun getMyFilesFolder(): FolderNode = cancellationCoroutineScope { source ->
+        log(DEBUG, "getMyFilesFolder")
+        bridge.getMyFilesFolder(
+            driveClientGetMyFilesFolderRequest {
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        ).toEntity()
+    }
+
+    override fun enumerateFolderChildrenNodeUids(
+        folderUid: NodeUid,
+    ): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateFolderChildrenNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateFolderChildrenNodeUids(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateFolderChildrenRequest {
+                    this.folderUid = folderUid.value
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override fun enumerateEvents(
+        scopeId: ScopeId,
+        cursorEventId: DriveEventId?,
+    ): Flow<DriveEvent> = channelFlow {
+        log(DEBUG, "enumerateEvents")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateEvents(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateEventsRequest {
+                    this.treeEventScopeId = scopeId.id
+                    cursorEventId?.let { this.cursorEventId = it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { event ->
+                    send(event.toEntity())
+                }
+            )
+        }
+    }
+
+    override suspend fun getNode(
+        nodeUid: NodeUid,
+    ): Node? = cancellationCoroutineScope { source ->
+        log(DEBUG, "getNode")
+        bridge.getNode(
+            driveClientGetNodeRequest {
+                this.nodeUid = nodeUid.value
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )?.toEntity()
+    }
+
+    override fun trashNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "trashNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.trashNodes(
+                coroutineScope = this@channelFlow,
+                driveClientTrashNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun deleteNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "deleteNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.deleteNodes(
+                coroutineScope = this@channelFlow,
+                driveClientDeleteNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun restoreNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<NodeResultPair> = channelFlow {
+        log(INFO, "restoreNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.restoreNodes(
+                coroutineScope = this@channelFlow,
+                driveClientRestoreNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { pair ->
+                    send(pair.toEntity())
+                }
+            )
+        }
+    }
+
+    override fun enumerateTrashNodeUids(): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateTrashNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateTrash(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateTrashRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override suspend fun emptyTrash(): Unit = cancellationCoroutineScope { source ->
+        log(INFO, "emptyTrash")
+        bridge.emptyTrash(
+            driveClientEmptyTrashRequest {
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )
+    }
+
+    override fun enumerateSharedNodeUids(): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateSharedNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateSharedNodeUids(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateSharedNodeUidsRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override fun enumerateSharedWithMeNodeUids(): Flow<NodeUid> = channelFlow {
+        log(DEBUG, "enumerateSharedWithMeNodeUids")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateSharedWithMeNodeUids(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateSharedWithMeNodeUidsRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { nodeUid ->
+                    send(NodeUid(nodeUid.value))
+                }
+            )
+        }
+    }
+
+    override suspend fun leaveSharedNode(
+        nodeUid: NodeUid,
+    ): Unit = cancellationCoroutineScope { source ->
+        log(INFO, "leaveSharedNode")
+        bridge.leaveSharedNode(
+            driveClientLeaveSharedNodeRequest {
+                this.nodeUid = nodeUid.value
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )
+    }
+
+    override suspend fun reportRecentlyAccessed(items: List<RecentlyAccessedReportItem>): Unit =
+        cancellationCoroutineScope { source ->
+            log(DEBUG, "reportRecentlyAccessed(${items.size})")
+            bridge.reportRecentlyAccessed(
+                driveClientReportRecentlyAccessedRequest {
+                    this.items += items.map { item ->
+                        recentlyAccessedReportItem {
+                            nodeUid = item.nodeUid.value
+                            item.accessTime?.toTimestamp()?.let { accessTime = it }
+                        }
+                    }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                }
+            )
+        }
+
+    override fun enumerateDevices(): Flow<Device> = channelFlow {
+        log(DEBUG, "enumerateDevices")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateDevices(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateDevicesRequest {
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { device ->
+                    send(device.toEntity())
+                }
+            )
+        }
+    }
+
+    override suspend fun createDevice(
+        name: String,
+        type: DeviceType,
+    ): Device = cancellationCoroutineScope { source ->
+        log(INFO, "createDevice")
+        bridge.createDevice(
+            driveClientCreateDeviceRequest {
+                this.name = name
+                deviceType = type.toProto()
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        ).toEntity()
+    }
+
+    override suspend fun renameDevice(
+        deviceUid: DeviceUid,
+        name: String,
+    ): Device = cancellationCoroutineScope { source ->
+        log(INFO, "renameDevice")
+        bridge.renameDevice(
+            driveClientRenameDeviceRequest {
+                this.deviceUid = deviceUid.value
+                this.name = name
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        ).toEntity()
+    }
+
+    override suspend fun deleteDevice(
+        deviceUid: DeviceUid,
+    ): Unit = cancellationCoroutineScope { source ->
+        log(INFO, "deleteDevice")
+        bridge.deleteDevice(
+            driveClientDeleteDeviceRequest {
+                this.deviceUid = deviceUid.value
+                clientHandle = handle
+                cancellationTokenSourceHandle = source.handle
+            }
+        )
+    }
+
+    override fun enumerateNodes(
+        nodeUids: List<NodeUid>,
+    ): Flow<Node> = channelFlow {
+        log(INFO, "enumerateNodes(${nodeUids.size} nodes)")
+        cancellationCoroutineScope { source ->
+            bridge.enumerateNodes(
+                coroutineScope = this@channelFlow,
+                request = driveClientEnumerateNodesRequest {
+                    this.nodeUids += nodeUids.map { it.value }
+                    clientHandle = handle
+                    cancellationTokenSourceHandle = source.handle
+                    yieldAction = ProtonDriveSdkNativeClient.getYieldPointer()
+                },
+                yield = { node ->
+                    send(node.toEntity())
+                }
+            )
+        }
+    }
+
+    override suspend fun downloader(
+        request: FileDownloaderRequest,
+    ): Downloader {
+        log(INFO, "downloader")
+        return ownedCancellationTokenSource { source ->
+            factory(JniFileDownloader()) {
+                FileDownloader(
+                    client = this@InteropProtonDriveClient,
+                    handle = getFileDownloader(
+                        clientHandle = handle,
+                        cancellationTokenSourceHandle = source.handle,
+                        request = request,
+                    ),
+                    bridge = this,
+                    cancellationTokenSource = source,
+                )
+            }
+        }
+    }
+
+    override suspend fun uploader(
+        request: FileUploaderRequest,
+    ): Uploader {
+        log(INFO, "fileUploader")
+        return ownedCancellationTokenSource { source ->
+            JniFileUploader().run {
+                FileUploader(
+                    client = this@InteropProtonDriveClient,
+                    handle = getFileUploader(
+                        clientHandle = handle,
+                        cancellationTokenSourceHandle = source.handle,
+                        request = request,
+                    ),
+                    bridge = this,
+                    cancellationTokenSource = source,
+                )
+            }
+        }
+    }
+
+    override suspend fun uploader(
+        request: FileRevisionUploaderRequest,
+    ): Uploader {
+        log(INFO, "fileRevisionUploader")
+        return ownedCancellationTokenSource { source ->
+            JniFileUploader().run {
+                FileUploader(
+                    client = this@InteropProtonDriveClient,
+                    handle = getFileRevisionUploader(
+                        clientHandle = handle,
+                        cancellationTokenSourceHandle = source.handle,
+                        request = request,
+                    ),
+                    bridge = this,
+                    cancellationTokenSource = source,
+                )
+            }
+        }
+    }
+
+    override fun close() {
+        log(DEBUG, "close")
+        bridge.free(handle)
+        clientScope.cancel()
+        super.close()
+    }
+
+    private fun log(level: LoggerProvider.Level, message: String) {
+        bridge.clientLogger(level, "DriveClient(${handle.toLogId()}) $message")
+    }
+}
