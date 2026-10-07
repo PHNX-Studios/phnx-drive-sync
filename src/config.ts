@@ -14,6 +14,7 @@ export const stateDbPath = path.join(shareDir, 'state.db');
 export const statusFile = path.join(stateDir, 'status.json');
 export const logFile = path.join(stateDir, 'drive-sync.log');
 export const lockFile = path.join(stateDir, 'daemon.lock');
+export const rpcSocket = path.join(stateDir, 'rpc.sock');
 
 export const filtersFile = path.join(localRoot, '.protonignore');
 export const partialSuffix = '.drivesync.part';

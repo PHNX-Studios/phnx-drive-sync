@@ -59,6 +59,10 @@ export function openState(): Database {
         );
         CREATE INDEX IF NOT EXISTS idx_remote_cache_uid ON remote_cache(uid);
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS online (
+            path   TEXT PRIMARY KEY,
+            pinned INTEGER NOT NULL DEFAULT 0
+        );
     `);
     return db;
 }
@@ -90,6 +94,53 @@ export function syncSet(r: SyncRow): void {
 
 export function syncDel(p: string): void {
     q('DELETE FROM sync WHERE path = ?').run(p);
+    // choke point: dropping a baseline row also drops its online-only marker
+    q('DELETE FROM online WHERE path = ?').run(p);
+}
+
+/** Row-only rename (baseline + online-only marker ride together; zero fs ops). */
+export function syncRename(from: string, to: string, uid?: string | null): void {
+    const row = syncGet(from);
+    if (!row) return;
+    const pinned = onlineGet(from);
+    syncDel(from);
+    syncSet({ ...row, path: to, uid: uid === undefined ? row.uid : uid });
+    if (pinned !== null) onlineSet(to, pinned);
+}
+
+// --- online-only markers (dehydrated files: content absent locally) ---
+
+export function onlineAll(): Map<string, number> {
+    const rows = q('SELECT path, pinned FROM online').all() as { path: string; pinned: number }[];
+    return new Map(rows.map((r) => [r.path, r.pinned]));
+}
+
+export function onlineGet(p: string): number | null {
+    const row = q('SELECT pinned FROM online WHERE path = ?').get(p) as { pinned: number } | null;
+    return row ? row.pinned : null;
+}
+
+export function onlineSet(p: string, pinned = 0): void {
+    q('INSERT INTO online (path, pinned) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET pinned=excluded.pinned').run(p, pinned);
+}
+
+export function onlineDel(p: string): void {
+    q('DELETE FROM online WHERE path = ?').run(p);
+}
+
+export function onlineHas(p: string): boolean {
+    return q('SELECT 1 FROM online WHERE path = ?').get(p) !== null;
+}
+
+export function onlineCount(): number {
+    const row = q('SELECT COUNT(*) AS n FROM online').get() as { n: number };
+    return row.n;
+}
+
+/** Defensive prune: drop markers whose baseline row is gone (syncDel is the primary dropper). */
+export function onlinePrune(): number {
+    const res = q('DELETE FROM online WHERE path NOT IN (SELECT path FROM sync)').run();
+    return Number(res.changes);
 }
 
 // --- remote cache ---

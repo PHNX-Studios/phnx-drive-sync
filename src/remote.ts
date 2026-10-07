@@ -241,6 +241,16 @@ export function cacheRemovePath(p: string): void {
     st.cacheDel(p);
 }
 
+/** Remove a path and every cached descendant (server-side cascade trash drops them all). */
+export function cacheRemoveSubtree(p: string): void {
+    for (const row of st.cacheAll()) {
+        if (row.path === p || row.path.startsWith(p + '/')) {
+            if (uidIndex.get(row.uid) === row.path) uidIndex.delete(row.uid);
+            st.cacheDel(row.path);
+        }
+    }
+}
+
 export function cacheRemoveUid(uid: string): void {
     const p = uidIndex.get(uid);
     if (p !== undefined) st.cacheDel(p);

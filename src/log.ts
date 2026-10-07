@@ -29,6 +29,7 @@ export interface StatusShape {
         renames: number;
         conflicts: number;
         errors: number;
+        placeholders: number;
     };
 }
 
@@ -40,7 +41,7 @@ export const status: StatusShape = {
     lastError: null,
     eventsDrained: 0,
     storage: null,
-    counts: { tracked: 0, uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0 },
+    counts: { tracked: 0, uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0, placeholders: 0 },
 };
 
 export function setStatus(patch: Partial<StatusShape>): void {

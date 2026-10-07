@@ -50,10 +50,11 @@ export function loadFilters(): void {
 }
 
 export function isFiltered(rel: string): boolean {
+    const base = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel;
+    // built-in: gvfs trash directories (never synced; Phase 2 exposes them through the mount)
+    if (base === '.Trash' || /^\.Trash-\d+$/.test(base)) return true;
     if (rules === null) loadFilters();
     const rs = rules!;
-    if (rs.length === 0) return false;
-    const base = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel;
     for (const r of rs) {
         if (r.test(rel) || r.test(base)) return true;
     }

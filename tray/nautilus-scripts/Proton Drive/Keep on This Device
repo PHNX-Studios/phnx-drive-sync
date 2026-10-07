@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Nautilus script: Keep on This Device (Proton Drive > Keep on This Device)
+# Downloads the selected online-only files back onto this device.
+# Note: filenames containing newlines are not supported by Nautilus' script env.
+set -u
+
+files=()
+while IFS= read -r f; do
+    [ -n "$f" ] && files+=("$f")
+done <<< "${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-}"
+
+if [ "${#files[@]}" -eq 0 ]; then
+    command -v notify-send >/dev/null 2>&1 && notify-send "Proton Drive" "No files selected"
+    exit 0
+fi
+
+out="$("$HOME/Projects/drive-sync/drive-sync.sh" pin "${files[@]}" 2>&1)"
+rc=$?
+
+if command -v notify-send >/dev/null 2>&1; then
+    short="$(printf '%s' "$out" | head -c 500)"
+    case "$rc" in
+        0) notify-send "Proton Drive" "Kept ${#files[@]} item(s) on this device" ;;
+        2) notify-send "Proton Drive" "Some files could not be restored:"$'\n'"$short" ;;
+        *) notify-send "Proton Drive" "Sync engine is not running:"$'\n'"$short" ;;
+    esac
+fi
+exit "$rc"

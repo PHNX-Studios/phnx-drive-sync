@@ -56,7 +56,7 @@ function baseOk(se: st.SyncRow | undefined, dir: boolean): se is st.SyncRow {
     return se.type === 'file' && se.lsize !== null && se.rsize !== null && se.lmtime !== null && se.rmtime !== null;
 }
 
-function steady(se: st.SyncRow): boolean {
+export function steady(se: st.SyncRow): boolean {
     return (
         se.lsize !== null &&
         se.rsize !== null &&
@@ -67,7 +67,7 @@ function steady(se: st.SyncRow): boolean {
     );
 }
 
-function fileEq(sizeA: number, mtimeA: number, sizeB: number, mtimeB: number): boolean {
+export function fileEq(sizeA: number, mtimeA: number, sizeB: number, mtimeB: number): boolean {
     return sizeA === sizeB && Math.abs(mtimeA - mtimeB) <= modifyWindowMs;
 }
 
@@ -115,6 +115,7 @@ function classify(
     L: Map<string, LocalNode>,
     R: Map<string, st.CacheRow>,
     S: Map<string, st.SyncRow>,
+    online: Map<string, number>,
     s: PassStats,
     dry: boolean,
 ): Action[] {
@@ -122,10 +123,11 @@ function classify(
     const used = new Set<string>();
 
     // Pairing: local renames (file moved locally -> move remote node)
+    // online-only files are absent locally; they are never rename sources (I2)
     {
         const gone: string[] = [];
         for (const [p, row] of S) {
-            if (row.type === 'file' && !L.has(p) && R.has(p) && steady(row)) gone.push(p);
+            if (row.type === 'file' && !L.has(p) && R.has(p) && steady(row) && !online.has(p)) gone.push(p);
         }
         const fresh: string[] = [];
         for (const [p, ln] of L) {
@@ -154,10 +156,11 @@ function classify(
     }
 
     // Pairing: remote renames (node moved remotely -> move local file)
+    // online-only files qualify too: execute() applies those as metadata-only renames
     {
         const gone: string[] = [];
         for (const [p, row] of S) {
-            if (row.type === 'file' && L.has(p) && !R.has(p) && steady(row)) gone.push(p);
+            if (row.type === 'file' && !R.has(p) && steady(row) && (L.has(p) || online.has(p))) gone.push(p);
         }
         const fresh: string[] = [];
         for (const [p, rn] of R) {
@@ -294,6 +297,20 @@ function classify(
                 s.deletes++;
                 continue;
             }
+            if (online.has(p)) {
+                // online-only file: content is intentionally absent locally.
+                // steady remote -> no action (never trashRemote: that is the file-eater, I1);
+                // changed remote -> metadata-only adopt, mirroring remote facts (l := r)
+                // so the baseline stays steady and a later pin hydrates the current bytes.
+                const sameR = fileEq(rSize(rn), rMtime(rn), se!.rsize!, se!.rmtime!);
+                if (!sameR || se!.uid !== rn.uid) {
+                    if (!dry) {
+                        st.syncSet({ path: p, uid: rn.uid, type: 'file', lsize: rSize(rn), lmtime: rMtime(rn), rsize: rSize(rn), rmtime: rMtime(rn) });
+                    }
+                    s.adopts++;
+                }
+                continue;
+            }
             const sameR = fileEq(rSize(rn), rMtime(rn), se!.rsize!, se!.rmtime!);
             if (sameR) {
                 actions.push({ phase: 'trashRemote', p, uid: rn.uid, dir: false });
@@ -410,6 +427,11 @@ async function execute(
                 }
                 case 'renameLocal': {
                     // local file moves from -> to; the remote node is already at `to`
+                    if (st.onlineHas(a.from)) {
+                        // online-only: no bytes on disk — row-only rename, zero fs ops
+                        st.syncRename(a.from, a.to, R.get(a.to)?.uid);
+                        break;
+                    }
                     mkdirSync(abs(parentRel(a.to)), { recursive: true });
                     renameSync(abs(a.from), abs(a.to));
                     const local = statSync(abs(a.to));
@@ -517,7 +539,10 @@ async function execute(
                         break;
                     }
                     await remote.trashRemoteUid(a.uid);
-                    remote.cacheRemovePath(a.p);
+                    // a dir cascade trashes every descendant server-side: drop the whole
+                    // subtree from the cache, or the next incremental pass sees "remote
+                    // present" children and resurrects them (local gone + no baseline → download)
+                    remote.cacheRemoveSubtree(a.p);
                     st.syncDel(a.p);
                     if (a.dir) trashedDirs.push(a.p);
                     break;
@@ -568,7 +593,21 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
     if (wantFull) log('INFO', `scan: local=${L.size} remote=${R.size} baseline=${st.syncAll().size}`);
     const S = st.syncAll();
 
-    const actions = classify(L, R, S, s, dry);
+    // online-only marker normalization (defense on top of the syncDel choke point):
+    // a marker whose file is back on disk is stale; a marker with no baseline row
+    // has no facts to pin from, so drop it here rather than let classify act on it.
+    // (The `marked ∧ ∉ baseline` backstop also runs post-pass as onlinePrune.)
+    const online = st.onlineAll();
+    if (!dry) {
+        for (const [p] of online) {
+            if (L.has(p) || !S.has(p)) {
+                st.onlineDel(p);
+                online.delete(p);
+            }
+        }
+    }
+
+    const actions = classify(L, R, S, online, s, dry);
     if (dry) {
         reportDry(actions);
     } else {
@@ -578,6 +617,10 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
         for (const [p] of S) {
             if (!L.has(p) && !R.has(p)) st.syncDel(p);
         }
+
+        // post-pass prune: markers whose baseline row vanished (I3: syncDel is the
+        // primary dropper; this is the defensive backstop)
+        st.onlinePrune();
 
         totals.uploads += s.uploads;
         totals.downloads += s.downloads;
@@ -594,7 +637,7 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
         lastPassMs: Date.now() - t0,
         lastError: s.lastError,
         eventsDrained: remote.drainedCount(),
-        counts: { tracked: st.syncAll().size, ...totals },
+        counts: { tracked: st.syncAll().size, ...totals, placeholders: online.size },
     });
     void remote.refreshStorage();
     log(

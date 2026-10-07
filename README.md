@@ -14,6 +14,16 @@ Requires: [bun](https://bun.sh) and an authenticated session via the official
 ./drive-sync.sh once           # single full pass (exit 0 ok, 2 errors, 3 auth)
 ./drive-sync.sh once --dry-run # classify only: report planned actions, change nothing
 ./drive-sync.sh status         # print status.json
+./drive-sync.sh unpin <paths…> # free local space; files stay on Proton Drive
+./drive-sync.sh pin <paths…>   # download online-only files back to this device
+```
+
+`pin`/`unpin` talk to the running daemon over a unix socket (`rpc.sock`), so the
+daemon must be up (exit 1 otherwise). Directories are expanded recursively over
+their files (folders themselves always stay on disk). `unpin` refuses to free
+bytes that are not synced yet — it runs/awaits a sync pass first and re-checks;
+exit 2 means some paths failed (per-path detail on stdout/stderr). `pinned`
+state lives in the `online` table of `state.db`.
 ```
 
 systemd (user):
@@ -62,6 +72,31 @@ file. Nothing is ever silently overwritten or dropped.
 Deletions mirror both ways (remote deletions land in Proton's trash, so they
 are recoverable there).
 
+## Files on demand (selective sync)
+
+Interim UX (no FUSE yet): *Free up Space* **removes** the local file while its
+content stays on Proton Drive and in the sync baseline — the path simply
+disappears from disk until restored. Visible size-preserving placeholders are
+roadmapped (see `LEDGER.md`, Phase 2).
+
+- `drive-sync.sh unpin 'path/…'` — after ensuring the latest local bytes are
+  synced, marks the file online-only and deletes the local bytes. Remote
+  untouched; subsequent passes (including `--dry-run`) take no action on it.
+- `drive-sync.sh pin 'path/…'` — re-downloads from the baseline
+  (uid/size/mtime), byte-identical, and clears the mark.
+
+Nautilus context menu (multi-select supported):
+
+```sh
+mkdir -p ~/.local/share/nautilus/scripts
+cp -r "tray/nautilus-scripts/Proton Drive" ~/.local/share/nautilus/scripts/
+```
+
+Then in Nautilus: right-click → *Scripts* → *Proton Drive* → **Free up Space**
+or **Keep on This Device**; the result comes back as a `notify-send`
+notification. Filenames containing newlines are not supported by Nautilus'
+script environment.
+
 ## Filters
 
 `~/Proton Drive/.protonignore` — gitignore-style globs, one per line,
@@ -75,9 +110,11 @@ The engine itself additionally never syncs `.protonignore` or `*.drivesync.part`
 | What | Where |
 |---|---|
 | baseline + remote cache (sqlite) | `~/.local/share/drive-sync/state.db` |
+| online-only markers (`online` table) | same db (dropped with their baseline row) |
 | SDK node/crypto cache | `~/.local/share/drive-sync/proton-cache/` |
 | log + `status.json` | `~/.local/state/drive-sync/` |
 | daemon pid lock | `~/.local/state/drive-sync/daemon.lock` (stale-aware) |
+| pin/unpin rpc socket | `~/.local/state/drive-sync/rpc.sock` (unlinked at boot/shutdown) |
 | tray icon + icons | `~/Projects/drive-sync/tray/` (autostart: `~/.config/autostart/drive-sync-tray.desktop`) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
