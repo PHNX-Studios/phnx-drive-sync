@@ -22,6 +22,7 @@ if command -v notify-send >/dev/null 2>&1; then
     case "$rc" in
         0) notify-send "Proton Drive" "Freed local space for ${#files[@]} item(s)" ;;
         2) notify-send "Proton Drive" "Some files could not be freed:"$'\n'"$short" ;;
+        64) notify-send "Proton Drive" "Invalid selection:"$'\n'"$short" ;;
         *) notify-send "Proton Drive" "Sync engine is not running:"$'\n'"$short" ;;
     esac
 fi

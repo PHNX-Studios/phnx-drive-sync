@@ -1,8 +1,10 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import path from 'node:path';
 
-import { lockFile, localRoot, passIntervalMs, stateDir, statusFile } from './config';
+import { lockFile, localRoot, passIntervalMs, shareDir, stateDir, statusFile, treeRoot } from './config';
 import { loadFilters } from './filters';
 import { log, setStatus, status } from './log';
+import { startMount, stopMount, type Sidecar } from './mount';
 import * as remote from './remote';
 import { rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc';
 import * as st from './state';
@@ -11,6 +13,7 @@ import { startWatcher } from './watcher';
 
 let lockHeld = false;
 let syncNowHook: (() => void) | null = null;
+let sidecar: Sidecar | null = null;
 
 // Consumed so SIGUSR1 never kills the process (e.g. before the daemon hook exists).
 process.on('SIGUSR1', () => syncNowHook?.());
@@ -89,8 +92,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    mkdirSync(localRoot, { recursive: true });
-    mkdirSync(stateDir, { recursive: true });
+    ensureLayout();
     st.openState();
     loadFilters();
 
@@ -105,14 +107,132 @@ async function main(): Promise<void> {
             await daemon();
         }
     } finally {
+        await stopMount(sidecar);
         await remote.shutdownRemote();
         releaseLock();
     }
     process.exit(process.exitCode ?? 0);
 }
 
+function isMountPoint(p: string): boolean {
+    try {
+        return statSync(p).dev !== statSync(path.dirname(p)).dev;
+    } catch {
+        return false;
+    }
+}
+
+/** Directories the daemon needs; relocates the legacy layout (real tree at localRoot) once. */
+function ensureLayout(): void {
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(shareDir, { recursive: true });
+    if (!existsSync(treeRoot)) {
+        let legacyHasData = false;
+        try {
+            legacyHasData = statSync(localRoot).isDirectory() && readdirSync(localRoot).length > 0;
+        } catch {
+            legacyHasData = false;
+        }
+        if (legacyHasData && !isMountPoint(localRoot)) {
+            log('INFO', `relocating real tree ${localRoot} -> ${treeRoot}`);
+            renameSync(localRoot, treeRoot); // same filesystem; fails loudly otherwise
+        }
+    }
+    mkdirSync(treeRoot, { recursive: true });
+    mkdirSync(localRoot, { recursive: true });
+}
+
 function absOf(p: string): string {
-    return p === '' ? localRoot : `${localRoot}/${p}`;
+    return p === '' ? treeRoot : `${treeRoot}/${p}`;
+}
+
+function parentRel(p: string): string {
+    const i = p.lastIndexOf('/');
+    return i === -1 ? '' : p.slice(0, i);
+}
+
+function baseName(p: string): string {
+    const i = p.lastIndexOf('/');
+    return i === -1 ? p : p.slice(i + 1);
+}
+
+const hydrating = new Map<string, Promise<void>>();
+
+/** Materialize a placeholder (sidecar open blocks on this): download + clear marker. */
+function hydrateOne(p: string): Promise<void> {
+    const running = hydrating.get(p);
+    if (running) return running;
+    const job = (async () => {
+        if (existsSync(absOf(p))) {
+            st.onlineDel(p); // materialized meanwhile (also done by pass normalization)
+            return;
+        }
+        if (st.onlineGet(p) === null) throw new Error(`not a placeholder: ${p}`);
+        const row = st.syncGet(p);
+        if (!row || row.type !== 'file' || row.uid === null || row.rsize === null || row.rmtime === null) {
+            throw new Error(`missing baseline facts: ${p}`);
+        }
+        await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
+        st.onlineDel(p); // keep the marker if the download failed (I5)
+        log('INFO', `hydrate: ${p} materialized`);
+    })().finally(() => hydrating.delete(p));
+    hydrating.set(p, job);
+    return job;
+}
+
+/** Wait for a dir the watcher may be about to sync, else create the remote chain inline. */
+async function ensureRemoteParentDir(rel: string): Promise<string | null> {
+    if (rel === '') return remote.remoteRootUid;
+    const deadline = Date.now() + 2500;
+    for (;;) {
+        const row = st.cacheGet(rel);
+        if (row && row.type === 'dir') return row.uid;
+        if (Date.now() >= deadline) break;
+        await new Promise((r) => setTimeout(r, 100));
+    }
+    const parentUid = await ensureRemoteParentDir(parentRel(rel));
+    if (!parentUid) return null;
+    const uid = await remote.createFolderRemote(parentUid, baseName(rel));
+    remote.cachePut({ path: rel, uid, type: 'dir', size: null, mtime: null });
+    st.syncSet({ path: rel, uid, type: 'dir', lsize: null, lmtime: null, rsize: null, rmtime: null });
+    return uid;
+}
+
+/** Move a placeholder (FUSE rename of a not-on-disk file): metadata-only, remote included. */
+async function mvPlaceholder(from: string, to: string): Promise<void> {
+    const row = st.syncGet(from);
+    if (!row || row.type !== 'file') throw new Error(`no such synced file: ${from}`);
+    if (!st.onlineHas(from)) throw new Error(`not a placeholder: ${from}`);
+    if (st.syncGet(to) || st.onlineHas(to) || existsSync(absOf(to))) throw new Error(`target already exists: ${to}`);
+    const nameChanged = baseName(to) !== baseName(from);
+    const parentChanged = parentRel(to) !== parentRel(from);
+    if (nameChanged || parentChanged) {
+        if (row.uid === null) throw new Error(`missing remote id: ${from}`);
+        let newParentUid: string | null = null;
+        if (parentChanged) newParentUid = await ensureRemoteParentDir(parentRel(to));
+        if (parentChanged && !newParentUid) throw new Error(`parent folder not found remotely: ${parentRel(to)}`);
+        await remote.moveRemoteUid(row.uid, nameChanged ? baseName(to) : null, newParentUid);
+        remote.cacheMovePath(from, to);
+    }
+    st.syncRename(from, to, row.uid);
+    st.onlineDel(from);
+    st.onlineSet(to, 0);
+    log('INFO', `mv: placeholder ${from} -> ${to}`);
+}
+
+/** Trash a placeholder (FUSE unlink of a not-on-disk file): remote + row + marker. */
+async function trashPlaceholder(p: string): Promise<void> {
+    if (!st.onlineHas(p)) throw new Error(`not a placeholder: ${p}`);
+    const row = st.syncGet(p);
+    if (row?.type === 'dir') throw new Error(`not a file: ${p}`);
+    if (row && row.uid) {
+        await remote.trashRemoteUid(row.uid);
+        remote.cacheRemoveSubtree(p);
+        st.syncDel(p); // single choke point drops row + marker (I3)
+    } else {
+        st.onlineDel(p);
+    }
+    log('INFO', `trash: placeholder ${p}`);
 }
 
 /** Expand requested paths to the file rows they cover (files only; dirs expand recursively). */
@@ -296,6 +416,10 @@ async function daemon(): Promise<void> {
         }
     };
 
+    log('INFO', 'starting FUSE mount...');
+    sidecar = await startMount();
+    if (!sidecar.ok) log('ERROR', 'mount degraded: users see an empty folder until the mount comes up');
+
     log('INFO', 'initial full pass...');
     passing = true;
     lastPassStartedAt = Date.now();
@@ -331,6 +455,24 @@ async function daemon(): Promise<void> {
             afterRpc();
             return results;
         },
+        hydrate: async (paths) => {
+            const p = paths[0];
+            await hydrateOne(p);
+            afterRpc();
+            return [{ path: p, ok: true, note: 'hydrated' }];
+        },
+        mv: async (paths) => {
+            const [from, to] = paths;
+            await mvPlaceholder(from, to);
+            afterRpc();
+            return [{ path: from, ok: true, note: `moved to ${to}` }];
+        },
+        trash: async (paths) => {
+            const p = paths[0];
+            await trashPlaceholder(p);
+            afterRpc();
+            return [{ path: p, ok: true, note: 'trashed' }];
+        },
     });
 
     syncNowHook = () => {
@@ -356,8 +498,10 @@ async function daemon(): Promise<void> {
             stopWatch();
             remote.stopEventLoop();
             stopRpcServer();
-            setStatus({ state: 'stopped' });
-            setTimeout(resolve, 500);
+            void stopMount(sidecar).then(() => {
+                setStatus({ state: 'stopped' });
+                setTimeout(resolve, 500);
+            });
         };
         process.on('SIGINT', () => shutdown('SIGINT'));
         process.on('SIGTERM', () => shutdown('SIGTERM'));

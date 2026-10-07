@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +26,8 @@ SYNC_DIR = os.path.expanduser("~/Proton Drive")
 ICON_DIR = os.path.join(_HERE, "icons")
 STATE_DIR = os.path.expanduser("~/.local/state/drive-sync")
 STATUS_FILE = os.path.join(STATE_DIR, "status.json")
+MOUNT_OK = os.path.join(STATE_DIR, "mount-ok")
+MOUNT_STALE_S = 15  # sidecar heartbeats every 2s; anything older means it died
 
 ICONS = {
     "idle": "drive-sync-idle",
@@ -107,6 +110,17 @@ def storage_detail(status):
     return f"Storage: {human_bytes(used)} used · {human_bytes(free)} free"
 
 
+def mount_degraded(active):
+    """True while the unit is up but the FUSE sidecar is gone or unresponsive."""
+    if not active:
+        return False
+    try:
+        age = time.time() - os.stat(MOUNT_OK).st_mtime
+    except OSError:
+        return True
+    return age > MOUNT_STALE_S
+
+
 def fetch_state():
     run = unit_props("ActiveState", "SubState", "ExecMainStatus")
     status = read_status()
@@ -133,6 +147,9 @@ def fetch_state():
             state, detail = "idle", f"Synced {last_rel}"
     else:
         state, detail = "syncing", "Syncing now..."
+
+    if mount_degraded(active) and state in ("idle", "syncing"):
+        state, detail = "error", "Mount degraded - folder not available"
 
     return {
         "state": state,

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 
-import { fullWalkEvery, localRoot, modifyWindowMs, seedAdoptWindowMs } from './config';
+import { fullWalkEvery, modifyWindowMs, seedAdoptWindowMs, treeRoot } from './config';
 import { log, setStatus } from './log';
 import * as remote from './remote';
 import * as st from './state';
@@ -47,7 +47,7 @@ function depthOf(p: string): number {
 }
 
 function abs(p: string): string {
-    return p === '' ? localRoot : `${localRoot}/${p}`;
+    return p === '' ? treeRoot : `${treeRoot}/${p}`;
 }
 
 function baseOk(se: st.SyncRow | undefined, dir: boolean): se is st.SyncRow {

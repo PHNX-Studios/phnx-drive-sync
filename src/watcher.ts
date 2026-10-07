@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 
-import { isPartial, localRoot } from './config';
+import { isPartial, treeRoot } from './config';
 import { log } from './log';
 
 export function startWatcher(onWake: (absPath: string) => void): () => void {
@@ -28,7 +28,7 @@ export function startWatcher(onWake: (absPath: string) => void): () => void {
                 'delete',
                 '-e',
                 'move',
-                localRoot,
+                treeRoot,
             ],
             { stdio: ['ignore', 'pipe', 'pipe'] },
         );

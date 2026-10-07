@@ -74,16 +74,27 @@ are recoverable there).
 
 ## Files on demand (selective sync)
 
-Interim UX (no FUSE yet): *Free up Space* **removes** the local file while its
-content stays on Proton Drive and in the sync baseline — the path simply
-disappears from disk until restored. Visible size-preserving placeholders are
-roadmapped (see `LEDGER.md`, Phase 2).
+`~/Proton Drive` is a FUSE mount (pyfuse3 sidecar) over the real tree at
+`~/.local/share/drive-sync/tree`. Every synced path is always visible with its
+real size; online-only files cost no disk (`du` ≈ 0, `blocks=0`). Reads never
+see zero-fill: reading a placeholder blocks, downloads the content from the
+baseline (byte-identical) and materializes the file — OneDrive recall
+semantics. Writes to a placeholder materialize first, then write.
 
 - `drive-sync.sh unpin 'path/…'` — after ensuring the latest local bytes are
-  synced, marks the file online-only and deletes the local bytes. Remote
-  untouched; subsequent passes (including `--dry-run`) take no action on it.
-- `drive-sync.sh pin 'path/…'` — re-downloads from the baseline
-  (uid/size/mtime), byte-identical, and clears the mark.
+  synced, marks the file online-only and drops the local bytes. It stays
+  visible through the mount; the next open/recall re-downloads it.
+- `drive-sync.sh pin 'path/…'` — recall explicitly (download + clear the mark),
+  byte-identical from the baseline (uid/size/mtime).
+- Renames/moves of placeholders are metadata-only (remote move included).
+- Nautilus/gio trash: a placeholder is trashed remotely; a materialized file
+  moves into the local `.Trash-<uid>` (never synced) and is trashed remotely
+  on the next pass.
+
+Sidecar requirements: `python3`, `fusermount3`/`libfuse3`, and `pyfuse3`,
+`trio`, `cffi` importable with `PYTHONPATH=~/.local/share/drive-sync/python`
+(the engine probes the import at startup; if it fails the engine still runs —
+the mount point stays empty and the tray shows "Mount degraded").
 
 Nautilus context menu (multi-select supported):
 
@@ -109,12 +120,16 @@ The engine itself additionally never syncs `.protonignore` or `*.drivesync.part`
 
 | What | Where |
 |---|---|
+| user-facing mount point (FUSE) | `~/Proton Drive` |
+| real tree (scan/watch/execute/filters) | `~/.local/share/drive-sync/tree` |
 | baseline + remote cache (sqlite) | `~/.local/share/drive-sync/state.db` |
 | online-only markers (`online` table) | same db (dropped with their baseline row) |
 | SDK node/crypto cache | `~/.local/share/drive-sync/proton-cache/` |
+| sidecar python libs (pyfuse3/trio/cffi) | `~/.local/share/drive-sync/python/` |
 | log + `status.json` | `~/.local/state/drive-sync/` |
 | daemon pid lock | `~/.local/state/drive-sync/daemon.lock` (stale-aware) |
 | pin/unpin rpc socket | `~/.local/state/drive-sync/rpc.sock` (unlinked at boot/shutdown) |
+| sidecar heartbeat (tray mount check) | `~/.local/state/drive-sync/mount-ok` |
 | tray icon + icons | `~/Projects/drive-sync/tray/` (autostart: `~/.config/autostart/drive-sync-tray.desktop`) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
@@ -122,7 +137,8 @@ last pass info, error counts and `storage: {used, max, driveUsed, fetchedAt}`
 (account quota from `/core/v4/users`, refreshed on startup and at most every
 5 min during passes — read by the tray icon).
 
-Env overrides: `DRIVE_SYNC_ROOT`, `DRIVE_SYNC_REMOTE` (path under *My files*,
+Env overrides: `DRIVE_SYNC_ROOT` (mount point), `DRIVE_SYNC_TREE` (real tree
+location), `DRIVE_SYNC_REMOTE` (path under *My files*,
 default: whole drive), `DRIVE_SYNC_HOME` (relocate all state — used for isolated
 tests), `DRIVE_SYNC_INTERVAL_MS` (60 s), `DRIVE_SYNC_FULL_EVERY` (10 passes),
 `DRIVE_SYNC_EVENT_IDLE_MS` (20 s).
@@ -147,6 +163,9 @@ cd vendor/cli && bun install        # bootstrap deps (node_modules is a symlink 
 ## Known caveats
 
 - One engine instance at a time (pid lock, single writer).
+- Through the mount a full-tree `find` takes ~6 s (vs ~50 ms on the raw tree):
+  one FUSE lookup+getattr round-trip per node. Interactive access is
+  unaffected (stat ≈ 5 ms, bulk reads > 750 MB/s, `du` ~55 ms per folder).
 - `once --dry-run` writes only harmless metadata (event id, status, log); the
   baseline table is untouched until a real pass executes.
 - Directory renames propagate as mkdir + child renames + trash cascade.

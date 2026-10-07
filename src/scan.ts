@@ -1,7 +1,7 @@
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { isPartial, localRoot } from './config';
+import { isPartial, treeRoot } from './config';
 import { isFiltered } from './filters';
 import { log } from './log';
 
@@ -13,7 +13,7 @@ export interface LocalNode {
 
 export async function walkLocal(): Promise<Map<string, LocalNode>> {
     const out = new Map<string, LocalNode>();
-    await walk(localRoot, '');
+    await walk(treeRoot, '');
     return out;
 
     async function walk(abs: string, rel: string): Promise<void> {

@@ -2,7 +2,7 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import path from 'node:path';
 
-import { localRoot, rpcSocket } from './config';
+import { localRoot, rpcSocket, treeRoot } from './config';
 import { log } from './log';
 import * as st from './state';
 
@@ -13,7 +13,7 @@ export interface PinResult {
 }
 
 export interface RpcRequest {
-    op: 'pin' | 'unpin';
+    op: 'pin' | 'unpin' | 'hydrate' | 'mv' | 'trash';
     paths: string[];
 }
 
@@ -27,7 +27,13 @@ export interface RpcResponse {
 export interface RpcHandlers {
     pin: (paths: string[]) => Promise<PinResult[]>;
     unpin: (paths: string[]) => Promise<PinResult[]>;
+    hydrate: (paths: string[]) => Promise<PinResult[]>;
+    mv: (paths: string[]) => Promise<PinResult[]>;
+    trash: (paths: string[]) => Promise<PinResult[]>;
 }
+
+/** null = any non-empty path list; number = exact arity (mv = [from, to]). */
+const OP_ARITY: Record<RpcRequest['op'], number | null> = { pin: null, unpin: null, hydrate: 1, mv: 2, trash: 1 };
 
 let server: Server | null = null;
 
@@ -78,10 +84,12 @@ async function dispatch(line: string, handlers: RpcHandlers, sock: Socket): Prom
     let resp: RpcResponse;
     try {
         const req = JSON.parse(line) as RpcRequest;
+        const arity = OP_ARITY[req.op];
         const pathsOk =
-            (req.op === 'pin' || req.op === 'unpin') &&
+            arity !== undefined &&
             Array.isArray(req.paths) &&
             req.paths.length > 0 &&
+            (arity === null || req.paths.length === arity) &&
             req.paths.every((p) => typeof p === 'string' && p !== '' && !p.split('/').includes('..'));
         if (!pathsOk) {
             resp = { ok: false, error: 'malformed request' };
@@ -101,10 +109,18 @@ async function dispatch(line: string, handlers: RpcHandlers, sock: Socket): Prom
 }
 
 function toRel(raw: string): string {
-    const abs = path.resolve(raw);
-    const root = localRoot.endsWith('/') ? localRoot : localRoot + '/';
-    if (!abs.startsWith(root)) throw new Error(`path is outside the sync root: ${raw}`);
-    return abs.slice(root.length);
+    let abs = path.resolve(raw.startsWith('file://') ? decodeURIComponent(raw.slice(7)) : raw);
+    while (abs.length > 1 && abs.endsWith('/')) abs = abs.slice(0, -1);
+    const strip = (root: string): string | null => {
+        const p = root.endsWith('/') ? root : root + '/';
+        return abs.startsWith(p) ? abs.slice(p.length) : null;
+    };
+    if (abs === localRoot || abs === treeRoot) {
+        throw new Error(`select files or folders inside the sync root, not the root itself: ${raw}`);
+    }
+    const rel = strip(localRoot) ?? strip(treeRoot);
+    if (rel === null || rel === '') throw new Error(`path is outside the sync root (${localRoot}): ${raw}`);
+    return rel;
 }
 
 function call(req: RpcRequest, timeoutMs: number): Promise<RpcResponse> {
