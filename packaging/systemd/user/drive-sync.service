@@ -1,0 +1,24 @@
+[Unit]
+Description=Bidirectional sync between ~/Proton Drive and Proton Drive (sync engine)
+Documentation=file:%h/Projects/drive-sync/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ~/Projects is a symlink to an external SSD mounted after login: wait for the
+# script instead of failing 203/EXEC and burning the restart counter
+ExecStartPre=/bin/sh -c 'i=0; until [ -x %h/Projects/drive-sync/drive-sync.sh ]; do i=$((i+1)); [ "$i" -ge 600 ] && exit 1; sleep 1; done'
+ExecStart=%h/Projects/drive-sync/drive-sync.sh run
+# belt & braces: never leave a FUSE session mounted if the engine dies hard
+ExecStopPost=-/usr/bin/fusermount3 -u "%h/Proton Drive"
+# full-tree walk takes ~5 min at 10k nodes: run it every 30 min, not every 10
+Environment=DRIVE_SYNC_INTERVAL_MS=120000
+Environment=DRIVE_SYNC_FULL_EVERY=15
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target

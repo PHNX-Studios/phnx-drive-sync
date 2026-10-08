@@ -36,10 +36,13 @@ journalctl --user -u drive-sync.service -f
 ```
 
 Auto-start: the service is `enabled`, so it starts at login; the tray is
-autostarted via `~/.config/autostart/drive-sync-tray.desktop`. If the engine
+autostarted via `~/.config/autostart/drive-sync-tray.desktop` (mount-safe wrapper) and also via `drive-sync-tray.service` user unit for resilience. If the engine
 ever needs a manual kick, **Drive Sync (restart engine)** in the application
-menu (and on the Desktop) runs `drive-sync.sh restart` — restarts the service
-and reports the result via `notify-send`.
+menu (and on the Desktop) runs `drive-sync.sh restart` — restarts the service,
+waits for the FUSE heartbeat to come back, and reports the result via
+`notify-send`. If the sidecar dies while the engine runs, the engine relaunches
+it automatically within seconds (see `mount` in `status.json`); the tray's
+**Sync now** also heals a degraded mount by restarting the unit.
 
 Tray icon (live status, storage, controls — autostarted):
 

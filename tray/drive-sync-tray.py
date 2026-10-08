@@ -151,11 +151,28 @@ def mount_degraded(active):
     """True while the unit is up but the FUSE sidecar is gone or unresponsive."""
     if not active:
         return False
+    return mount_age_s() > MOUNT_STALE_S
+
+
+def mount_age_s():
+    """Seconds since the sidecar's last heartbeat; inf when the file is gone."""
     try:
-        age = time.time() - os.stat(MOUNT_OK).st_mtime
+        return time.time() - os.stat(MOUNT_OK).st_mtime
     except OSError:
-        return True
-    return age > MOUNT_STALE_S
+        return float("inf")
+
+
+def remount(*_):
+    """Engine alive but mount dead: restart the unit (a plain SIGUSR1 won't remount)."""
+    subprocess.run(["systemctl", "--user", "restart", SYNC_UNIT], capture_output=True)
+    GLib.timeout_add_seconds(2, _remount_poll)
+
+
+def _remount_poll():
+    poll()
+    if STATE.get("state") == "error" and "Mount degraded" in STATE.get("detail", ""):
+        return True  # still degraded; poll() keeps trying
+    return False
 
 
 def fetch_state():
@@ -209,6 +226,9 @@ def sync_now(*_):
     if active == "failed":
         subprocess.run(["systemctl", "--user", "reset-failed", SYNC_UNIT], capture_output=True)
         active = None
+    if active == "active" and mount_degraded(True):
+        remount()
+        return
     if active == "active":
         subprocess.run(
             ["systemctl", "--user", "kill", "--kill-whom=main", "--signal=SIGUSR1", SYNC_UNIT],

@@ -23,6 +23,8 @@ export interface StatusShape {
     storage: StorageInfo | null;
     /** recall-on-hover/prefetch toggle (state.db meta override, else DRIVE_SYNC_PREFETCH) */
     prefetch: boolean;
+    /** FUSE mount health: the sidecar can die while the engine keeps running */
+    mount: 'ok' | 'degraded';
     counts: {
         tracked: number;
         uploads: number;
@@ -45,6 +47,7 @@ export const status: StatusShape = {
     eventsDrained: 0,
     storage: null,
     prefetch: prefetchDefault(),
+    mount: 'ok',
     counts: { tracked: 0, uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0, placeholders: 0, reclaimable: 0 },
 };
 

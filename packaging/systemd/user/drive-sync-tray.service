@@ -1,0 +1,28 @@
+[Unit]
+Description=Proton Drive Sync tray icon
+Documentation=file:%h/Projects/drive-sync/README.md
+PartOf=graphical-session.target
+After=graphical-session.target
+BindsTo=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PATH=/usr/bin:/bin:/usr/local/bin
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=DISPLAY=:0
+Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME
+Environment=GI_TYPELIB_PATH=%h/.local/lib/girepository-1.0
+Environment=PYTHONUNBUFFERED=1
+Environment=NO_AT_BRIDGE=1
+ExecStartPre=/bin/sh -c 'until [ -x %h/Projects/drive-sync/tray/drive-sync-tray.py ]; do sleep 1; done'
+ExecStart=/usr/bin/python3 %h/Projects/drive-sync/tray/drive-sync-tray.py
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+Slice=session.slice
+
+[Install]
+WantedBy=graphical-session.target

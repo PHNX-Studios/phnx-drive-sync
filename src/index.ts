@@ -6,7 +6,7 @@ import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
 import { log, setStatus, status } from './log';
-import { startMount, stopMount, type Sidecar } from './mount';
+import { isMountPoint, monitorMount, startMount, stopMount } from './mount';
 import * as remote from './remote';
 import { rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc';
 import * as st from './state';
@@ -15,7 +15,6 @@ import { startWatcher } from './watcher';
 
 let lockHeld = false;
 let syncNowHook: (() => void) | null = null;
-let sidecar: Sidecar | null = null;
 
 // Consumed so SIGUSR1 never kills the process (e.g. before the daemon hook exists).
 process.on('SIGUSR1', () => syncNowHook?.());
@@ -110,19 +109,11 @@ async function main(): Promise<void> {
             await daemon();
         }
     } finally {
-        await stopMount(sidecar);
+        await stopMount();
         await remote.shutdownRemote();
         releaseLock();
     }
     process.exit(process.exitCode ?? 0);
-}
-
-function isMountPoint(p: string): boolean {
-    try {
-        return statSync(p).dev !== statSync(path.dirname(p)).dev;
-    } catch {
-        return false;
-    }
 }
 
 /** Directories the daemon needs; relocates the legacy layout (real tree at localRoot) once. */
@@ -438,8 +429,9 @@ async function daemon(): Promise<void> {
     };
 
     log('INFO', 'starting FUSE mount...');
-    sidecar = await startMount();
-    if (!sidecar.ok) log('ERROR', 'mount degraded: users see an empty folder until the mount comes up');
+    const mounted = await startMount();
+    if (!mounted.ok) log('ERROR', 'mount degraded: users see an empty folder until the mount comes up');
+    monitorMount();
 
     log('INFO', 'initial full pass...');
     passing = true;
@@ -565,7 +557,7 @@ async function daemon(): Promise<void> {
             stopWatch();
             remote.stopEventLoop();
             stopRpcServer();
-            void stopMount(sidecar).then(() => {
+            void stopMount().then(() => {
                 setStatus({ state: 'stopped' });
                 setTimeout(resolve, 500);
             });

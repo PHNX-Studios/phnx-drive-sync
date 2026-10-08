@@ -8,12 +8,23 @@ export PROTON_DRIVE_LOG_LEVEL="${PROTON_DRIVE_LOG_LEVEL:-WARN}"
 # Manual recovery used by the "Drive Sync (restart engine)" desktop launcher.
 if [ "${1:-}" = "restart" ]; then
     if systemctl --user restart drive-sync.service; then
-        notify-send -a "Drive Sync" "Drive Sync" "Engine restarted" 2>/dev/null || true
+        # report success only once the FUSE sidecar is actually beating again —
+        # a restarted engine with a dead mount is the failure mode users hit
+        mount_ok="$HOME/.local/state/drive-sync/mount-ok"
+        for _ in $(seq 1 60); do
+            if [ -e "$mount_ok" ] && [ -n "$(find "$mount_ok" -newermt '-15 seconds' -print -quit 2>/dev/null)" ]; then
+                notify-send -a "Drive Sync" "Drive Sync" "Engine restarted — Proton Drive mounted" 2>/dev/null || true
+                exit 0
+            fi
+            systemctl --user is-active --quiet drive-sync.service || break
+            sleep 1
+        done
+        notify-send -a "Drive Sync" -u critical "Drive Sync" "Engine restarted, but the FUSE mount did not come up — check: journalctl --user -u drive-sync.service" 2>/dev/null || true
+        exit 1
     else
         notify-send -a "Drive Sync" -u critical "Drive Sync" "Engine restart failed — check: systemctl --user status drive-sync" 2>/dev/null || true
         exit 1
     fi
-    exit 0
 fi
 
 exec bun run "$HOME/Projects/drive-sync/src/index.ts" "$@"

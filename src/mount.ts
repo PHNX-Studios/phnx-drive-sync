@@ -3,7 +3,7 @@ import { existsSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import { localRoot, rpcSocket, shareDir, stateDbPath, stateDir, treeRoot } from './config';
-import { log } from './log';
+import { log, setStatus, status } from './log';
 
 export const mountOkPath = path.join(stateDir, 'mount-ok');
 const sidecarPath = path.join(import.meta.dir, '..', 'python', 'sidecar.py');
@@ -38,6 +38,9 @@ export interface Sidecar {
     ok: boolean;
 }
 
+/** The engine's one mount handle; owned here so the monitor can replace it. */
+let current: Sidecar | null = null;
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 function sidecarEnv(): NodeJS.ProcessEnv {
@@ -51,6 +54,11 @@ export async function startMount(): Promise<Sidecar> {
     } catch {
         /* no heartbeat from a previous run */
     }
+    current = await mountOnce();
+    return current;
+}
+
+async function mountOnce(): Promise<Sidecar> {
     const probe = spawnSync('python3', ['-c', 'import pyfuse3'], { env: sidecarEnv(), stdio: 'ignore' });
     if (probe.status !== 0) {
         log('ERROR', 'pyfuse3 unavailable for the sidecar; mount degraded (mountpoint stays empty)');
@@ -83,14 +91,99 @@ export async function startMount(): Promise<Sidecar> {
     return { child, ok: false };
 }
 
-export async function stopMount(sidecar: Sidecar | null): Promise<void> {
-    const child = sidecar?.child;
+function isSidecarLive(): boolean {
+    return current?.child != null && current.child.exitCode === null;
+}
+
+let monitorTimer: ReturnType<typeof setInterval> | null = null;
+let monitoring = false;
+
+/**
+ * Keep the FUSE mount alive for the life of the daemon: watches the mount-ok
+ * heartbeat and restarts the sidecar when it stops beating (external unmount,
+ * SIGTERM, crash) — without restarting the engine. The interval is deliberately
+ * unref'd so it can never hold the process open during shutdown.
+ */
+export function monitorMount(): void {
+    if (monitorTimer) return;
+    monitoring = true;
+    const beat = (): boolean => {
+        try {
+            return Date.now() - statSync(mountOkPath).mtimeMs <= 15_000;
+        } catch {
+            return false;
+        }
+    };
+    const setMount = (m: 'ok' | 'degraded'): void => {
+        if (status.mount !== m) setStatus({ mount: m });
+    };
+    let failures = 0;
+    let relaunching = false;
+    let nextAttemptAt = 0;
+    const tick = async (): Promise<void> => {
+        if (relaunching) return;
+        if (beat() && isMountPoint(localRoot)) {
+            setMount('ok');
+            failures = 0;
+            return;
+        }
+        if (isSidecarLive() && beat()) {
+            // live sidecar with a fresh heartbeat: transient pause, give it time
+            return;
+        }
+        if (Date.now() < nextAttemptAt) return;
+        relaunching = true;
+        try {
+            failures += 1;
+            log('WARN', `FUSE mount lost; relaunching sidecar (attempt ${failures})`);
+            await retireSidecar(); // never stack a second sidecar on a wedged one
+            recoverStaleMount();
+            try {
+                unlinkSync(mountOkPath);
+            } catch {
+                /* already gone */
+            }
+            setMount('degraded');
+            const s = await mountOnce();
+            if (!monitoring) {
+                // engine is shutting down: undo a relaunch that landed too late
+                if (s.child && s.child.exitCode === null) s.child.kill('SIGTERM');
+                return;
+            }
+            current = s;
+            if (s.ok) failures = 0;
+            // back off progressively when the sidecar keeps failing to come up
+            else nextAttemptAt = Date.now() + Math.min(60, 5 * failures) * 1000;
+        } finally {
+            relaunching = false;
+        }
+    };
+    const timer = setInterval(() => {
+        if (!monitoring) return;
+        void tick();
+    }, 5_000);
+    timer.unref();
+    monitorTimer = timer;
+}
+
+async function retireSidecar(): Promise<void> {
+    const child = current?.child;
     if (child && child.exitCode === null) {
         child.kill('SIGTERM');
         const deadline = Date.now() + 5000;
         while (child.exitCode === null && Date.now() < deadline) await sleep(50);
         if (child.exitCode === null) child.kill('SIGKILL');
     }
+    current = null;
+}
+
+export async function stopMount(): Promise<void> {
+    monitoring = false;
+    if (monitorTimer) {
+        clearInterval(monitorTimer);
+        monitorTimer = null;
+    }
+    await retireSidecar();
     if (isMountPoint(localRoot)) {
         const rc = fusermount('-u', localRoot);
         if (rc !== 0) log('WARN', `shutdown unmount failed (rc=${rc})`);
