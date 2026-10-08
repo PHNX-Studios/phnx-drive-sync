@@ -1,7 +1,9 @@
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
-import { lockFile, localRoot, passIntervalMs, shareDir, stateDir, statusFile, treeRoot } from './config';
+import { lockFile, localRoot, passIntervalMs, prefetchDefault, shareDir, stateDir, statusFile, treeRoot } from './config';
+import { kickEmblems, syncEmblemsOnce } from './emblems';
+import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
 import { log, setStatus, status } from './log';
 import { startMount, stopMount, type Sidecar } from './mount';
@@ -75,14 +77,14 @@ async function main(): Promise<void> {
         }
         return;
     }
-    if (mode === 'pin' || mode === 'unpin') {
+    if (mode === 'pin' || mode === 'unpin' || mode === 'evict' || mode === 'prefetch') {
         // client of the running daemon: no lock, no remote connection
         process.exitCode = await rpcClient(mode, process.argv.slice(3));
         return;
     }
     const dryRun = process.argv.includes('--dry-run');
     if (mode !== 'run' && mode !== 'once') {
-        console.error('usage: drive-sync [run|once [--dry-run]|status|pin <path>...|unpin <path>...]');
+        console.error('usage: drive-sync [run|once [--dry-run]|status|pin <path>...|unpin <path>...|evict [path...]|prefetch on|off|status]');
         process.exitCode = 64;
         return;
     }
@@ -101,6 +103,7 @@ async function main(): Promise<void> {
         await remote.initRemote();
         if (mode === 'once') {
             const s = await runPass({ forceFull: true, dry: dryRun });
+            if (!dryRun) await syncEmblemsOnce();
             setStatus({ state: dryRun ? 'stopped' : 'idle' });
             process.exitCode = s.authFailed ? 3 : s.errors > 0 ? 2 : 0;
         } else {
@@ -325,15 +328,21 @@ async function unpinFiles(reqs: string[], ensureFresh: () => Promise<void>): Pro
         // marker BEFORE unlink so a watcher DELETE classifies as a steady placeholder (I1);
         // synchronous back-to-back, so no pass can observe an intermediate state
         st.onlineSet(p, 0);
+        // "Free up space" overrides an earlier keep-mark (last explicit instruction wins)
+        st.pinnedDel(p);
         try {
             unlinkSync(absOf(p));
             results.push({ path: p, ok: true, note: 'freed' });
         } catch (e) {
             st.onlineDel(p);
+            st.pinnedSet(p); // the file is still local: restore its keep-mark
             results.push({ path: p, ok: false, note: `cannot remove local file: ${e instanceof Error ? e.message : String(e)}` });
         }
     }
-    for (const p of already) results.push({ path: p, ok: true, note: 'already online-only' });
+    for (const p of already) {
+        st.pinnedDel(p); // already online-only; drop any stale keep-mark
+        results.push({ path: p, ok: true, note: 'already online-only' });
+    }
     for (const p of absent) results.push({ path: p, ok: false, note: 'file not present locally' });
 
     const freed = results.filter((r) => r.note === 'freed').length;
@@ -348,6 +357,7 @@ async function pinFiles(reqs: string[]): Promise<PinResult[]> {
     const results: PinResult[] = [...notes];
     for (const p of targets) {
         if (st.onlineGet(p) === null) {
+            st.pinnedSet(p); // Keep on This Device, even when it never left
             results.push({ path: p, ok: true, note: 'already on this device' });
             continue;
         }
@@ -359,6 +369,7 @@ async function pinFiles(reqs: string[]): Promise<PinResult[]> {
         try {
             await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
             st.onlineDel(p); // keep the marker if the download failed (I5)
+            st.pinnedSet(p); // keep-mark survives materialization; auto-evict must never free this
             results.push({ path: p, ok: true, note: 'restored' });
         } catch (e) {
             const why = remote.errMsg(e);
@@ -370,6 +381,14 @@ async function pinFiles(reqs: string[]): Promise<PinResult[]> {
     const failed = results.filter((r) => !r.ok).length;
     log('INFO', `pin: restored=${restored} failed=${failed} targets=${targets.length}`);
     return results;
+}
+
+/** Effective recall-on-hover/prefetch state: state.db meta override, else the env default. */
+function prefetchEffective(): boolean {
+    const m = st.metaGet('prefetch');
+    if (m === 'on') return true;
+    if (m === 'off') return false;
+    return prefetchDefault();
 }
 
 async function daemon(): Promise<void> {
@@ -404,6 +423,8 @@ async function daemon(): Promise<void> {
         try {
             const s = await runPass({ forceFull: false });
             if (s.authFailed) log('ERROR', 'authentication required; will retry each interval (re-login via the official proton-drive CLI if this persists)');
+            maybeAutoEvict(new Set(hydrating.keys()));
+            kickEmblems();
         } catch (e) {
             log('ERROR', 'pass crashed', e);
             setStatus({ state: 'running', lastError: e instanceof Error ? e.message : String(e) });
@@ -429,7 +450,9 @@ async function daemon(): Promise<void> {
     } finally {
         passing = false;
     }
-    setStatus({ state: 'running' });
+    setStatus({ state: 'running', prefetch: prefetchEffective() });
+    maybeAutoEvict(new Set(hydrating.keys()));
+    kickEmblems();
     log('INFO', 'initial pass done; starting event loop, watcher and interval');
 
     // Ensure at least one pass has *started and finished* after the call time.
@@ -443,7 +466,13 @@ async function daemon(): Promise<void> {
         }
     };
 
-    const afterRpc = (): void => setStatus({ counts: { ...status.counts, placeholders: st.onlineCount() } });
+    const afterRpc = (): void => {
+        kickEmblems();
+        setStatus({
+            prefetch: prefetchEffective(),
+            counts: { ...status.counts, placeholders: st.onlineCount(), reclaimable: st.reclaimableBytes() },
+        });
+    };
     startRpcServer({
         pin: async (paths) => {
             const results = await pinFiles(paths);
@@ -454,6 +483,44 @@ async function daemon(): Promise<void> {
             const results = await unpinFiles(paths, ensureFresh);
             afterRpc();
             return results;
+        },
+        evict: async (paths) => {
+            // never free unsynced bytes: run/await a pass first (I4, same rule as unpin)
+            await ensureFresh();
+            const all = paths.length === 1 && paths[0] === '*';
+            let targets: string[] | null = null;
+            const notes: PinResult[] = [];
+            if (!all) {
+                const exp = expandTargets(paths, st.syncAll());
+                targets = exp.targets;
+                notes.push(...exp.notes);
+            }
+            const out = evictAll({ targets, busy: new Set(hydrating.keys()) });
+            log('INFO', `evict: ${evictSummary(out)}`);
+            notify(
+                out.freed > 0
+                    ? `Freed ${fmtBytes(out.bytes)} — ${out.freed} file(s) are now online-only.\n` +
+                          (out.kept > 0 || out.dirty > 0
+                              ? `${out.kept} kept on this device and ${out.dirty} with unsynced changes were left local.`
+                              : '')
+                    : 'Nothing to free: files are already online-only, unsynced, or kept on this device.',
+            );
+            afterRpc();
+            return [...notes, { path: all ? 'all local copies' : `${targets?.length ?? 0} file(s)`, ok: true, note: evictSummary(out) }];
+        },
+        prefetch: async (paths) => {
+            const v = paths[0];
+            if (v === 'status') return [{ path: 'prefetch', ok: true, note: prefetchEffective() ? 'on' : 'off' }];
+            if (v !== 'on' && v !== 'off') throw new Error('usage: prefetch on|off|status');
+            st.metaSet('prefetch', v);
+            log(
+                'INFO',
+                v === 'on'
+                    ? 'prefetch on: looking up a placeholder now triggers a background recall (materializes)'
+                    : 'prefetch off: placeholders recall only on open (default)',
+            );
+            afterRpc();
+            return [{ path: 'prefetch', ok: true, note: `now ${v}` }];
         },
         hydrate: async (paths) => {
             const p = paths[0];

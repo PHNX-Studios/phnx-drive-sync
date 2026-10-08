@@ -4,8 +4,10 @@
 import fcntl
 import json
 import os
+import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -27,7 +29,9 @@ ICON_DIR = os.path.join(_HERE, "icons")
 STATE_DIR = os.path.expanduser("~/.local/state/drive-sync")
 STATUS_FILE = os.path.join(STATE_DIR, "status.json")
 MOUNT_OK = os.path.join(STATE_DIR, "mount-ok")
+RPC_SOCK = os.path.join(STATE_DIR, "rpc.sock")
 MOUNT_STALE_S = 15  # sidecar heartbeats every 2s; anything older means it died
+EVICT_LABEL = "Free up space (all local files)"
 
 ICONS = {
     "idle": "drive-sync-idle",
@@ -36,12 +40,13 @@ ICONS = {
     "paused": "drive-sync-paused",
 }
 
-STATE = {"state": "idle", "detail": "Starting...", "active": False}
+STATE = {"state": "idle", "detail": "Starting...", "active": False, "evicting": False}
 
 indicator = None
 status_item = None
 storage_item = None
 pause_item = None
+evict_item = None
 
 
 def unit_props(*props):
@@ -102,12 +107,44 @@ def human_bytes(n):
 
 def storage_detail(status):
     storage = status.get("storage")
-    if not isinstance(storage, dict) or not storage.get("max"):
+    counts = status.get("counts") or {}
+    bits = []
+    if isinstance(storage, dict) and storage.get("max"):
+        used = storage.get("used", 0)
+        maximum = storage.get("max", 0)
+        free = max(0, maximum - used)
+        bits.append(f"{human_bytes(used)} used · {human_bytes(free)} free")
+    placeholders = counts.get("placeholders")
+    if isinstance(placeholders, int) and placeholders > 0:
+        line = f"{placeholders} online-only"
+        reclaimable = counts.get("reclaimable")
+        if isinstance(reclaimable, int) and reclaimable > 0:
+            line += f" · {human_bytes(reclaimable)} reclaimable"
+        bits.append(line)
+    if not bits:
         return "Storage: not reported yet"
-    used = storage.get("used", 0)
-    maximum = storage.get("max", 0)
-    free = max(0, maximum - used)
-    return f"Storage: {human_bytes(used)} used · {human_bytes(free)} free"
+    return "Storage: " + " · ".join(bits)
+
+
+def rpc_call(op, paths, timeout=15 * 60):
+    """Talk to the drive-sync daemon over its unix socket (pin/unpin/evict/prefetch...)."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(RPC_SOCK)
+        sock.sendall((json.dumps({"op": op, "paths": paths}) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = sock.recv(65536)
+            if not chunk:
+                raise RuntimeError("sync engine closed the connection")
+            buf += chunk
+    finally:
+        sock.close()
+    resp = json.loads(buf.split(b"\n", 1)[0].decode())
+    if not resp.get("ok"):
+        raise RuntimeError(resp.get("error") or f"{op} failed")
+    return resp
 
 
 def mount_degraded(active):
@@ -157,7 +194,13 @@ def fetch_state():
         "storage": storage_detail(status),
         "active": active,
         "failed": run.get("ActiveState") == "failed",
+        "reclaimable": counts_reclaimable(status),
     }
+
+
+def counts_reclaimable(status):
+    value = (status.get("counts") or {}).get("reclaimable")
+    return value if isinstance(value, int) else 0
 
 
 def sync_now(*_):
@@ -205,6 +248,37 @@ def toggle_pause(*_):
     poll()
 
 
+def free_up_space(*_):
+    """Bulk-evict: tell the daemon to make every local file online-only (keeps stay local)."""
+    if STATE.get("evicting"):
+        return
+    STATE["evicting"] = True
+    evict_item.set_sensitive(False)
+    evict_item.set_label("Freeing space...")
+
+    def work():
+        err = None
+        try:
+            rpc_call("evict", ["*"])
+        except FileNotFoundError:
+            err = "Sync engine is not running"
+        except Exception as exc:
+            err = f"Could not free space: {exc}"
+        GLib.idle_add(_evict_done, err)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _evict_done(err):
+    STATE["evicting"] = False
+    evict_item.set_sensitive(True)
+    evict_item.set_label(EVICT_LABEL)
+    if err:
+        subprocess.run(["notify-send", "Proton Drive Sync", err], capture_output=True)
+    poll()
+    return False
+
+
 def poll():
     try:
         state = fetch_state()
@@ -218,6 +292,10 @@ def poll():
     status_item.set_label(state["detail"])
     storage_item.set_label(state["storage"])
     pause_item.set_label("Resume syncing" if not state["active"] else "Pause syncing")
+    # bulk free: only worth offering while the mount is up and there is something to free
+    want_evict = state["active"] and (STATE.get("evicting") or state.get("reclaimable", 0) > 0)
+    if evict_item.get_visible() != want_evict:
+        evict_item.set_visible(want_evict)
     return True
 
 
@@ -229,7 +307,7 @@ def main():
     except OSError:
         sys.exit(0)
 
-    global indicator, status_item, storage_item, pause_item
+    global indicator, status_item, storage_item, pause_item, evict_item
 
     indicator = AppIndicator3.Indicator.new(
         "drive-sync", ICONS["idle"], AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
@@ -260,6 +338,10 @@ def main():
     log_item = Gtk.MenuItem(label="Show last log")
     log_item.connect("activate", show_log)
     menu.append(log_item)
+
+    evict_item = Gtk.MenuItem(label=EVICT_LABEL)
+    evict_item.connect("activate", free_up_space)
+    menu.append(evict_item)
     menu.append(Gtk.SeparatorMenuItem())
 
     pause_item = Gtk.MenuItem(label="Pause syncing")
@@ -271,6 +353,7 @@ def main():
     menu.append(quit_item)
 
     menu.show_all()
+    evict_item.set_visible(False)  # poll() reveals it when there is reclaimable space
     indicator.set_menu(menu)
 
     poll()

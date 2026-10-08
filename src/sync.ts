@@ -1,23 +1,24 @@
 import { existsSync, mkdirSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 
-import { fullWalkEvery, modifyWindowMs, seedAdoptWindowMs, treeRoot } from './config';
+import { fullWalkEvery, modifyWindowMs, newFilesMode, seedAdoptWindowMs, treeRoot } from './config';
 import { log, setStatus } from './log';
 import * as remote from './remote';
 import * as st from './state';
 import { walkLocal, type LocalNode } from './scan';
 
-type Action =
+export type Action =
     | { phase: 'mkdirLocal'; p: string }
     | { phase: 'mkdirRemote'; p: string }
     | { phase: 'renameLocal'; from: string; to: string }
     | { phase: 'renameRemote'; from: string; to: string }
     | { phase: 'download'; p: string; uid: string; size: number; mtimeMs: number }
+    | { phase: 'adoptOnline'; p: string; uid: string; size: number; mtimeMs: number }
     | { phase: 'conflict'; p: string; uid: string; size: number; mtimeMs: number; conflictRel: string }
     | { phase: 'upload'; p: string; existingUid: string | null }
     | { phase: 'rmLocal'; p: string; dir: boolean }
     | { phase: 'trashRemote'; p: string; uid: string; dir: boolean };
 
-interface PassStats {
+export interface PassStats {
     uploads: number;
     downloads: number;
     deletes: number;
@@ -111,7 +112,7 @@ function conflictRelFor(p: string, remoteMtimeMs: number, L: Map<string, LocalNo
     }
 }
 
-function classify(
+export function classify(
     L: Map<string, LocalNode>,
     R: Map<string, st.CacheRow>,
     S: Map<string, st.SyncRow>,
@@ -286,6 +287,11 @@ function classify(
             if (!baseOk(se, rIsDir(rn))) {
                 if (rIsDir(rn)) {
                     actions.push({ phase: 'mkdirLocal', p });
+                } else if (newFilesMode() === 'online') {
+                    // DRIVE_SYNC_NEW_FILES=online: a remote file with no local history
+                    // becomes a placeholder instead of a download (dirs still materialize).
+                    actions.push({ phase: 'adoptOnline', p, uid: rn.uid, size: rSize(rn), mtimeMs: rMtime(rn) });
+                    s.adopts++;
                 } else {
                     actions.push({ phase: 'download', p, uid: rn.uid, size: rSize(rn), mtimeMs: rMtime(rn) });
                     s.downloads++;
@@ -333,6 +339,7 @@ const PHASE_ORDER: Record<Action['phase'], number> = {
     renameLocal: 2,
     renameRemote: 3,
     download: 4,
+    adoptOnline: 4,
     upload: 4,
     conflict: 4,
     rmLocal: 5,
@@ -436,6 +443,7 @@ async function execute(
                     renameSync(abs(a.from), abs(a.to));
                     const local = statSync(abs(a.to));
                     const rn = R.get(a.to);
+                    const keep = st.pinnedHas(a.from);
                     st.syncDel(a.from);
                     if (rn) {
                         st.syncSet({
@@ -447,6 +455,8 @@ async function execute(
                             rsize: rSize(rn),
                             rmtime: rMtime(rn),
                         });
+                        // keep-mark rides the rename (syncDel dropped it for from)
+                        if (keep) st.pinnedSet(a.to);
                     }
                     break;
                 }
@@ -465,6 +475,7 @@ async function execute(
                     await remote.moveRemoteUid(rnFrom.uid, rename ? baseName(a.to) : null, newParentUid);
                     remote.cacheMovePath(a.from, a.to);
                     const local = statSync(abs(a.to));
+                    const keep = st.pinnedHas(a.from);
                     st.syncDel(a.from);
                     st.syncSet({
                         path: a.to,
@@ -475,6 +486,7 @@ async function execute(
                         rsize: rSize(rnFrom),
                         rmtime: rMtime(rnFrom),
                     });
+                    if (keep) st.pinnedSet(a.to);
                     break;
                 }
                 case 'download': {
@@ -488,6 +500,21 @@ async function execute(
                         rsize: a.size,
                         rmtime: a.mtimeMs,
                     });
+                    break;
+                }
+                case 'adoptOnline': {
+                    // placeholder-only: no bytes fetched (same convention as hydrate's
+                    // post-download syncSet + onlineDel, mirrored as syncSet + onlineSet)
+                    st.syncSet({
+                        path: a.p,
+                        uid: a.uid,
+                        type: 'file',
+                        lsize: a.size,
+                        lmtime: a.mtimeMs,
+                        rsize: a.size,
+                        rmtime: a.mtimeMs,
+                    });
+                    st.onlineSet(a.p, 0);
                     break;
                 }
                 case 'upload': {
@@ -621,6 +648,7 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
         // post-pass prune: markers whose baseline row vanished (I3: syncDel is the
         // primary dropper; this is the defensive backstop)
         st.onlinePrune();
+        st.pinnedPrune();
 
         totals.uploads += s.uploads;
         totals.downloads += s.downloads;
@@ -637,7 +665,12 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
         lastPassMs: Date.now() - t0,
         lastError: s.lastError,
         eventsDrained: remote.drainedCount(),
-        counts: { tracked: st.syncAll().size, ...totals, placeholders: online.size },
+        counts: {
+            tracked: st.syncAll().size,
+            ...totals,
+            placeholders: st.onlineCount(),
+            reclaimable: st.reclaimableBytes(),
+        },
     });
     void remote.refreshStorage();
     log(
@@ -668,7 +701,7 @@ function reportDry(actions: Action[]): void {
         log('INFO', 'dry: no changes needed');
         return;
     }
-    const order = ['mkdirLocal', 'mkdirRemote', 'renameLocal', 'renameRemote', 'download', 'upload', 'conflict', 'rmLocal', 'trashRemote'];
+    const order = ['mkdirLocal', 'mkdirRemote', 'renameLocal', 'renameRemote', 'download', 'adoptOnline', 'upload', 'conflict', 'rmLocal', 'trashRemote'];
     for (const phase of order) {
         const list = byPhase.get(phase);
         if (!list) continue;

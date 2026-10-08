@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { logFile, statusFile } from './config';
+import { logFile, prefetchDefault, statusFile } from './config';
 
 mkdirSync(path.dirname(logFile), { recursive: true });
 mkdirSync(path.dirname(statusFile), { recursive: true });
@@ -21,6 +21,8 @@ export interface StatusShape {
     lastError: string | null;
     eventsDrained: number;
     storage: StorageInfo | null;
+    /** recall-on-hover/prefetch toggle (state.db meta override, else DRIVE_SYNC_PREFETCH) */
+    prefetch: boolean;
     counts: {
         tracked: number;
         uploads: number;
@@ -30,6 +32,7 @@ export interface StatusShape {
         conflicts: number;
         errors: number;
         placeholders: number;
+        reclaimable: number;
     };
 }
 
@@ -41,7 +44,8 @@ export const status: StatusShape = {
     lastError: null,
     eventsDrained: 0,
     storage: null,
-    counts: { tracked: 0, uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0, placeholders: 0 },
+    prefetch: prefetchDefault(),
+    counts: { tracked: 0, uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0, placeholders: 0, reclaimable: 0 },
 };
 
 export function setStatus(patch: Partial<StatusShape>): void {

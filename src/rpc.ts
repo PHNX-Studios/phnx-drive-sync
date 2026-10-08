@@ -13,7 +13,7 @@ export interface PinResult {
 }
 
 export interface RpcRequest {
-    op: 'pin' | 'unpin' | 'hydrate' | 'mv' | 'trash';
+    op: 'pin' | 'unpin' | 'hydrate' | 'mv' | 'trash' | 'evict' | 'prefetch';
     paths: string[];
 }
 
@@ -30,10 +30,12 @@ export interface RpcHandlers {
     hydrate: (paths: string[]) => Promise<PinResult[]>;
     mv: (paths: string[]) => Promise<PinResult[]>;
     trash: (paths: string[]) => Promise<PinResult[]>;
+    evict: (paths: string[]) => Promise<PinResult[]>;
+    prefetch: (paths: string[]) => Promise<PinResult[]>;
 }
 
 /** null = any non-empty path list; number = exact arity (mv = [from, to]). */
-const OP_ARITY: Record<RpcRequest['op'], number | null> = { pin: null, unpin: null, hydrate: 1, mv: 2, trash: 1 };
+const OP_ARITY: Record<RpcRequest['op'], number | null> = { pin: null, unpin: null, hydrate: 1, mv: 2, trash: 1, evict: null, prefetch: 1 };
 
 let server: Server | null = null;
 
@@ -164,17 +166,28 @@ function call(req: RpcRequest, timeoutMs: number): Promise<RpcResponse> {
 }
 
 /** Client side: returns the process exit code. No lock, no remote connection. */
-export async function rpcClient(op: 'pin' | 'unpin', rawPaths: string[]): Promise<number> {
-    if (rawPaths.length === 0) {
-        console.error(`usage: drive-sync ${op} <path>...`);
-        return 64;
-    }
+export async function rpcClient(op: 'pin' | 'unpin' | 'evict' | 'prefetch', rawPaths: string[]): Promise<number> {
     let rels: string[];
-    try {
-        rels = [...new Set(rawPaths.map(toRel))];
-    } catch (e) {
-        console.error(`drive-sync: ${e instanceof Error ? e.message : String(e)}`);
-        return 64;
+    if (op === 'prefetch') {
+        const v = (rawPaths[0] ?? '').toLowerCase();
+        if (!['on', 'off', 'status'].includes(v) || rawPaths.length > 1) {
+            console.error('usage: drive-sync prefetch on|off|status');
+            return 64;
+        }
+        rels = [v];
+    } else if (rawPaths.length === 0) {
+        if (op !== 'evict') {
+            console.error(`usage: drive-sync ${op} <path>...`);
+            return 64;
+        }
+        rels = ['*']; // evict without paths = every reclaimable file (bulk "Free up space")
+    } else {
+        try {
+            rels = [...new Set(rawPaths.map(toRel))];
+        } catch (e) {
+            console.error(`drive-sync: ${e instanceof Error ? e.message : String(e)}`);
+            return 64;
+        }
     }
     let resp: RpcResponse;
     try {

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Drive Sync (restart engine)
+Comment=Restart the Drive Sync background engine
+Exec=/home/user/Projects/drive-sync/drive-sync.sh restart
+Icon=drive-sync
+Terminal=false
+Categories=Utility;

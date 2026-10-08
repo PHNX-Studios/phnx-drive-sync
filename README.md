@@ -16,15 +16,17 @@ Requires: [bun](https://bun.sh) and an authenticated session via the official
 ./drive-sync.sh status         # print status.json
 ./drive-sync.sh unpin <paths…> # free local space; files stay on Proton Drive
 ./drive-sync.sh pin <paths…>   # download online-only files back to this device
+./drive-sync.sh evict [paths…] # bulk "Free up space": no paths = every local file
+./drive-sync.sh prefetch on|off|status  # recall-on-hover toggle (default off)
+./drive-sync.sh restart         # systemctl --user restart + notification
 ```
 
-`pin`/`unpin` talk to the running daemon over a unix socket (`rpc.sock`), so the
-daemon must be up (exit 1 otherwise). Directories are expanded recursively over
-their files (folders themselves always stay on disk). `unpin` refuses to free
-bytes that are not synced yet — it runs/awaits a sync pass first and re-checks;
-exit 2 means some paths failed (per-path detail on stdout/stderr). `pinned`
-state lives in the `online` table of `state.db`.
-```
+`pin`/`unpin`/`evict` talk to the running daemon over a unix socket (`rpc.sock`),
+so the daemon must be up (exit 1 otherwise). Directories are expanded
+recursively over their files (folders themselves always stay on disk).
+`unpin`/`evict` refuse to free bytes that are not synced yet — they run/await a
+sync pass first and re-check; exit 2 means some paths failed (per-path detail on
+stdout/stderr).
 
 systemd (user):
 
@@ -32,6 +34,12 @@ systemd (user):
 systemctl --user enable --now drive-sync.service
 journalctl --user -u drive-sync.service -f
 ```
+
+Auto-start: the service is `enabled`, so it starts at login; the tray is
+autostarted via `~/.config/autostart/drive-sync-tray.desktop`. If the engine
+ever needs a manual kick, **Drive Sync (restart engine)** in the application
+menu (and on the Desktop) runs `drive-sync.sh restart` — restarts the service
+and reports the result via `notify-send`.
 
 Tray icon (live status, storage, controls — autostarted):
 
@@ -42,6 +50,9 @@ tray/drive-sync-tray.py   # status, used/free storage, Sync now, Pause/Resume, l
 - **Sync now** sends the daemon `SIGUSR1` (runs an immediate incremental pass,
   ~0.5 s) or starts the unit if paused.
 - **Pause/Resume** stops/starts `drive-sync.service`.
+- **Free up space (all local files)** appears whenever there is reclaimable
+  space and runs the same bulk evict as `drive-sync.sh evict` (keep-marked and
+  unsynced files stay local).
 - Icon states: idle (green), syncing (orange, incl. long full walks), error
   (red: service failed / auth required / last pass errored), paused (grey).
 
@@ -85,11 +96,50 @@ semantics. Writes to a placeholder materialize first, then write.
   synced, marks the file online-only and drops the local bytes. It stays
   visible through the mount; the next open/recall re-downloads it.
 - `drive-sync.sh pin 'path/…'` — recall explicitly (download + clear the mark),
-  byte-identical from the baseline (uid/size/mtime).
+  byte-identical from the baseline (uid/size/mtime). `pin` also sets a
+  **keep-on-this-device** mark: auto-eviction and bulk free will never touch
+  that file until an `unpin` (or a free-up-space) clears the mark — last
+  explicit instruction wins.
+- `drive-sync.sh evict [path/…]` — bulk *Free up space* (no paths = every
+  materialized file). Only clean, synced, non-keep-marked files are freed,
+  largest first; unsynced edits and keep-marked files stay local. The same
+  action is available from the tray menu.
 - Renames/moves of placeholders are metadata-only (remote move included).
 - Nautilus/gio trash: a placeholder is trashed remotely; a materialized file
   moves into the local `.Trash-<uid>` (never synced) and is trashed remotely
   on the next pass.
+
+**Recall on hover (prefetch, default off).** With `drive-sync.sh prefetch on`,
+any lookup of a placeholder through the mount (hover, preview, directory stat)
+queues a background download instead of waiting for the first open; two
+downloads run in parallel, the rest queue. `prefetch off` (the default)
+recalls only on open. The override lives in `state.db` (`prefetch` meta key);
+without it the sidecar falls back to `DRIVE_SYNC_PREFETCH` (env default).
+
+**Auto-evict on low disk (default off).** With `DRIVE_SYNC_EVICT_FREE_GB=<n>`
+set (e.g. in the systemd unit), every pass checks the free space of the
+filesystem holding the real tree; below the threshold the largest clean,
+non-keep-marked local files are evicted until the threshold clears, and a
+`notify-send` report says what was freed.
+
+**New remote files.** `DRIVE_SYNC_NEW_FILES=online` makes files that first
+appear remotely materialize as placeholders instead of downloading (folders
+still materialize). Default `local` = download, as before.
+
+**Nautilus badges (cloud vs star).** Every synced file carries a badge via
+the gvfs metadata store (`metadata::emblems` keyword → `emblem-<keyword>`
+icon): online-only placeholders show a **cloud**, materialized files a
+**star** — the badge tracks bytes-on-disk only (keep-marked files are stars
+too). Folders get none. The engine applies the diff after every pass and after
+pin/unpin/evict/hydrate RPCs (concurrency 8), remembering the last applied
+badge per path in `state.db` so restarts and no-op passes spawn nothing;
+`DRIVE_SYNC_EMBLEMS=off` disables it entirely. Since Yaru ships no cloud
+emblem, a custom `emblem-cloud.svg` is installed into
+`~/.local/share/icons/hicolor/scalable/emblems/` on first sync (stale theme
+cache invalidated alongside). Nautilus re-reads metadata only on F5 /
+re-entering the folder — badges appear after a refresh, not live. Failure
+modes degrade quietly: `gio` missing → logged once, badges skipped; mount
+down → missing paths deferred until the next pass.
 
 Sidecar requirements: `python3`, `fusermount3`/`libfuse3`, and `pyfuse3`,
 `trio`, `cffi` importable with `PYTHONPATH=~/.local/share/drive-sync/python`
@@ -124,6 +174,7 @@ The engine itself additionally never syncs `.protonignore` or `*.drivesync.part`
 | real tree (scan/watch/execute/filters) | `~/.local/share/drive-sync/tree` |
 | baseline + remote cache (sqlite) | `~/.local/share/drive-sync/state.db` |
 | online-only markers (`online` table) | same db (dropped with their baseline row) |
+| keep-on-this-device marks (`pinned` table) | same db (survive recall; dropped with their baseline row) |
 | SDK node/crypto cache | `~/.local/share/drive-sync/proton-cache/` |
 | sidecar python libs (pyfuse3/trio/cffi) | `~/.local/share/drive-sync/python/` |
 | log + `status.json` | `~/.local/state/drive-sync/` |
@@ -133,15 +184,20 @@ The engine itself additionally never syncs `.protonignore` or `*.drivesync.part`
 | tray icon + icons | `~/Projects/drive-sync/tray/` (autostart: `~/.config/autostart/drive-sync-tray.desktop`) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
-last pass info, error counts and `storage: {used, max, driveUsed, fetchedAt}`
-(account quota from `/core/v4/users`, refreshed on startup and at most every
-5 min during passes — read by the tray icon).
+last pass info, error counts, the recall-on-hover `prefetch` toggle, and
+`counts: {…, placeholders, reclaimable}` (placeholder count and the bytes a
+bulk free could still reclaim — what the tray storage line shows), plus
+`storage: {used, max, driveUsed, fetchedAt}` (account quota from
+`/core/v4/users`, refreshed on startup and at most every 5 min during passes —
+read by the tray icon).
 
 Env overrides: `DRIVE_SYNC_ROOT` (mount point), `DRIVE_SYNC_TREE` (real tree
 location), `DRIVE_SYNC_REMOTE` (path under *My files*,
 default: whole drive), `DRIVE_SYNC_HOME` (relocate all state — used for isolated
 tests), `DRIVE_SYNC_INTERVAL_MS` (60 s), `DRIVE_SYNC_FULL_EVERY` (10 passes),
-`DRIVE_SYNC_EVENT_IDLE_MS` (20 s).
+`DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `DRIVE_SYNC_NEW_FILES` (`local`|`online`),
+`DRIVE_SYNC_EVICT_FREE_GB` (auto-evict threshold, 0 = off),
+`DRIVE_SYNC_PREFETCH` (sidecar recall-on-hover default, off unless set).
 
 A full remote walk of the current tree (~10.3k nodes, 1.27k folders) takes
 ~5 min warm; systemd unit runs fallback intervals at 2 min with a full walk
@@ -157,6 +213,7 @@ interval — re-login with the official CLI:
 ```sh
 cd vendor/cli && bun install        # bootstrap deps (node_modules is a symlink into vendor)
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
+bun test test/                      # classify/placeholder/evict unit tests (temp state)
 ./drive-sync.sh once --dry-run      # classify without changing anything
 ```
 

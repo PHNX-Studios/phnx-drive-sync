@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { Database } from 'bun:sqlite';
 
-import { stateDbPath } from './config';
+import { modifyWindowMs, stateDbPath } from './config';
 
 export type EntryType = 'file' | 'dir';
 
@@ -63,6 +63,8 @@ export function openState(): Database {
             path   TEXT PRIMARY KEY,
             pinned INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS pinned (path TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS emblem (path TEXT PRIMARY KEY, keyword TEXT NOT NULL);
     `);
     return db;
 }
@@ -95,17 +97,21 @@ export function syncSet(r: SyncRow): void {
 export function syncDel(p: string): void {
     q('DELETE FROM sync WHERE path = ?').run(p);
     // choke point: dropping a baseline row also drops its online-only marker
+    // and its "keep on this device" mark (no orphans by construction)
     q('DELETE FROM online WHERE path = ?').run(p);
+    q('DELETE FROM pinned WHERE path = ?').run(p);
 }
 
-/** Row-only rename (baseline + online-only marker ride together; zero fs ops). */
+/** Row-only rename (baseline + online-only marker + pinned mark ride together; zero fs ops). */
 export function syncRename(from: string, to: string, uid?: string | null): void {
     const row = syncGet(from);
     if (!row) return;
     const pinned = onlineGet(from);
+    const keep = pinnedHas(from);
     syncDel(from);
     syncSet({ ...row, path: to, uid: uid === undefined ? row.uid : uid });
     if (pinned !== null) onlineSet(to, pinned);
+    if (keep) pinnedSet(to);
 }
 
 // --- online-only markers (dehydrated files: content absent locally) ---
@@ -141,6 +147,66 @@ export function onlineCount(): number {
 export function onlinePrune(): number {
     const res = q('DELETE FROM online WHERE path NOT IN (SELECT path FROM sync)').run();
     return Number(res.changes);
+}
+
+/**
+ * "Keep on this device": files auto-eviction must never touch. Independent of the
+ * online table on purpose — an online row disappears when the file is recalled,
+ * while the keep-mark must survive materialization (Phase 3).
+ */
+export function pinnedHas(p: string): boolean {
+    return q('SELECT 1 FROM pinned WHERE path = ?').get(p) !== null;
+}
+
+export function pinnedAll(): string[] {
+    const rows = q('SELECT path FROM pinned').all() as { path: string }[];
+    return rows.map((r) => r.path);
+}
+
+export function pinnedSet(p: string): void {
+    q('INSERT OR IGNORE INTO pinned (path) VALUES (?)').run(p);
+}
+
+export function pinnedDel(p: string): void {
+    q('DELETE FROM pinned WHERE path = ?').run(p);
+}
+
+/** Defensive prune: drop keep-marks whose baseline row is gone (syncDel is the primary dropper). */
+export function pinnedPrune(): number {
+    const res = q('DELETE FROM pinned WHERE path NOT IN (SELECT path FROM sync)').run();
+    return Number(res.changes);
+}
+
+/**
+ * Bytes "Free up space" could still reclaim: steady baseline rows that are neither
+ * online-only nor keep-marked (a not-yet-synced local edit counts — unpin runs a
+ * pass first and then frees it). One query, no stat walk: the tray polls this.
+ */
+export function reclaimableBytes(): number {
+    const row = q(
+        `SELECT COALESCE(SUM(lsize), 0) AS n FROM sync
+         WHERE type = 'file' AND lsize IS NOT NULL AND rsize IS NOT NULL
+           AND lmtime IS NOT NULL AND rmtime IS NOT NULL
+           AND ABS(lsize - rsize) <= ? AND ABS(lmtime - rmtime) <= ?
+           AND path NOT IN (SELECT path FROM online)
+           AND path NOT IN (SELECT path FROM pinned)`,
+    ).get(modifyWindowMs, modifyWindowMs) as { n: number };
+    return Number(row.n);
+}
+
+// --- nautilus badges (metadata::emblems last applied per path) ---
+
+export function emblemAll(): Map<string, string> {
+    const rows = q('SELECT path, keyword FROM emblem').all() as { path: string; keyword: string }[];
+    return new Map(rows.map((r) => [r.path, r.keyword]));
+}
+
+export function emblemPut(p: string, keyword: string): void {
+    q('INSERT INTO emblem (path, keyword) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET keyword=excluded.keyword').run(p, keyword);
+}
+
+export function emblemRemove(p: string): void {
+    q('DELETE FROM emblem WHERE path = ?').run(p);
 }
 
 // --- remote cache ---

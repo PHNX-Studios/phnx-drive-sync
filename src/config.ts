@@ -29,6 +29,23 @@ export const seedAdoptWindowMs = 10_000;
 export const eventIdleTimeoutMs = Number(process.env.DRIVE_SYNC_EVENT_IDLE_MS || 20_000);
 export const watcherDebounceMs = 3_000;
 
+/** Newly-appeared remote files: `local` (default, download) or `online` (placeholder). Read per call so tests can flip it. */
+export function newFilesMode(): 'local' | 'online' {
+    return (process.env.DRIVE_SYNC_NEW_FILES ?? '').trim().toLowerCase() === 'online' ? 'online' : 'local';
+}
+/** Auto-evict threshold in GiB; 0 (default) disables auto-eviction entirely. */
+export function evictFreeGb(): number {
+    return Math.max(0, Number(process.env.DRIVE_SYNC_EVICT_FREE_GB || 0));
+}
+/** Sidecar default for recall-on-hover/prefetch; `drive-sync.sh prefetch on|off` overrides via state.db meta. */
+export function prefetchDefault(): boolean {
+    return /^(1|on|true|yes)$/i.test((process.env.DRIVE_SYNC_PREFETCH ?? '').trim());
+}
+/** Nautilus badges (metadata::emblems): on by default; `DRIVE_SYNC_EMBLEMS=off` disables. */
+export function emblemsEnabled(): boolean {
+    return !/^(0|off|false|no)$/i.test((process.env.DRIVE_SYNC_EMBLEMS ?? '').trim());
+}
+
 export function isPartial(rel: string): boolean {
     return rel.endsWith(partialSuffix);
 }

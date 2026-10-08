@@ -9,6 +9,10 @@ sync baseline (--db, read-only):
   disk cost (st_blocks=0); open() blocks on a hydrate RPC to the engine,
   which downloads into --tree and clears the marker, then the real file is
   served (OneDrive recall semantics: materializes).
+- recall-on-hover/prefetch (default off): when enabled (DRIVE_SYNC_PREFETCH
+  env default, state.db `prefetch` meta key override), lookup() of a
+  placeholder queues a background hydrate — any stat/preview of an
+  online-only file starts downloading it without blocking the caller.
 
 Must be spawned by the engine under systemd --user (unconfined): AppArmor's
 fusermount3 profile cannot inherit a unix socket created under the
@@ -47,7 +51,15 @@ DIR_FH: dict = {}   # opendir fh -> rel
 MOUNT = TREE = DB = RPC = MOUNT_OK = None  # set in main()
 DBCONN = None
 STOPPING = False
+NURSERY = None  # set in run(); prefetch jobs are started on it
 _dir_fh_next = [1]
+
+# recall-on-hover/prefetch (default off): lookups of placeholders queue a
+# background hydrate instead of waiting for an open. Bounded so a listing of a
+# big folder cannot flood the engine with parallel downloads.
+PREFETCH_QUEUE: list = []
+PREFETCH_INFLIGHT: set = set()
+PREFETCH_MAX = 2
 
 
 # ---------------------------------------------------------------- paths/inos
@@ -245,6 +257,44 @@ async def hydrate(rel: str):
     logging.info('hydrate: %s done', rel)
 
 
+# ---------------------------------------------------------------- prefetch
+
+def prefetch_enabled() -> bool:
+    """Recall-on-hover toggle: state.db meta override, else DRIVE_SYNC_PREFETCH env default."""
+    try:
+        row = DBCONN.execute("SELECT value FROM meta WHERE key = 'prefetch'").fetchone()
+    except sqlite3.Error:
+        row = None
+    if row is not None:
+        return row[0] == 'on'
+    return (os.environ.get('DRIVE_SYNC_PREFETCH') or '').strip().lower() in ('1', 'on', 'true', 'yes')
+
+
+def _pump_prefetch():
+    while PREFETCH_QUEUE and len(PREFETCH_INFLIGHT) < PREFETCH_MAX and not STOPPING and NURSERY is not None:
+        rel = PREFETCH_QUEUE.pop(0)
+        PREFETCH_INFLIGHT.add(rel)
+        NURSERY.start_soon(_prefetch_job, rel)
+
+
+def _schedule_prefetch(rel: str):
+    if STOPPING or NURSERY is None or rel in PREFETCH_INFLIGHT or rel in PREFETCH_QUEUE:
+        return
+    PREFETCH_QUEUE.append(rel)
+    _pump_prefetch()
+
+
+async def _prefetch_job(rel: str):
+    try:
+        await trio.to_thread.run_sync(lambda: rpc('hydrate', [rel]))
+        logging.info('prefetch: %s materialized', rel)
+    except Exception as e:  # engine down / stopping: best effort, the open path still blocks
+        logging.warning('prefetch: %s failed: %s', rel, e)
+    finally:
+        PREFETCH_INFLIGHT.discard(rel)
+        _pump_prefetch()
+
+
 # ---------------------------------------------------------------- filesystem
 
 class Ops(pyfuse3.Operations):
@@ -262,7 +312,13 @@ class Ops(pyfuse3.Operations):
             return fs_attrs(parent_rel(prel))
         if '/' in name or name == '':
             raise pyfuse3.FUSEError(errno.ENOENT)
-        return fs_attrs(join_rel(prel, name))
+        rel = join_rel(prel, name)
+        attrs = fs_attrs(rel)
+        # recall-on-hover/prefetch (default off): any lookup of a placeholder —
+        # hover, preview, a directory stat — queues a background download
+        if not on_tree(rel) and prefetch_enabled():
+            _schedule_prefetch(rel)
+        return attrs
 
     async def opendir(self, inode, ctx=None):
         rel = rel_of(inode)
@@ -497,9 +553,17 @@ async def heartbeat():
 
 
 async def run():
+    global NURSERY, STOPPING
     async with trio.open_nursery() as n:
+        NURSERY = n
         n.start_soon(heartbeat)
-        await pyfuse3.main()
+        try:
+            await pyfuse3.main()
+        finally:
+            # unmounted (or shutting down): stop rpc retries in prefetch/hydrate
+            # threads, then let the heartbeat and any queued jobs unwind
+            STOPPING = True
+            n.cancel_scope.cancel()
 
 
 def main():
@@ -515,8 +579,14 @@ def main():
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
                         format='%(asctime)s sidecar %(levelname)s %(message)s')
-    signal.signal(signal.SIGTERM, lambda *a: sys.exit(143))
-    signal.signal(signal.SIGINT, lambda *a: sys.exit(130))
+
+    def _handle_signal(signum, _frame):
+        global STOPPING
+        STOPPING = True  # let blocked hydrate/prefetch rpc threads bail before exit
+        sys.exit(143 if signum == signal.SIGTERM else 130)
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
     ino_for('')  # register the root inode before any request arrives
     DBCONN = sqlite3.connect(f'file:{DB}?mode=ro', uri=True, check_same_thread=False)
     DBCONN.execute('PRAGMA query_only=1')
