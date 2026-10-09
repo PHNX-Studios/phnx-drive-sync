@@ -15,9 +15,9 @@ function fakeApply(record: Map<string, string | null>, behavior?: (rel: string, 
 beforeEach(resetState);
 
 describe('emblemFor', () => {
-    test('online-only file gets the cloud, materialized file the star', () => {
+    test('online-only file gets the cloud, materialized file the green check', () => {
         expect(emblemFor('file', true)).toBe('cloud');
-        expect(emblemFor('file', false)).toBe('favorite');
+        expect(emblemFor('file', false)).toBe('default');
     });
 
     test('folders never get a badge', () => {
@@ -33,7 +33,7 @@ describe('desiredEmblems', () => {
         st.onlineSet('gone/b.txt');
         seedRow({ path: 'Folder', type: 'dir' });
         const desired = desiredEmblems();
-        expect(desired.get('keep/a.txt')).toBe('favorite');
+        expect(desired.get('keep/a.txt')).toBe('default');
         expect(desired.get('gone/b.txt')).toBe('cloud');
         expect(desired.has('Folder')).toBe(false);
     });
@@ -47,10 +47,10 @@ describe('syncEmblems', () => {
         const applied = new Map<string, string | null>();
         const s = await syncEmblems(fakeApply(applied));
         expect(s).toEqual({ set: 2, unset: 0, failed: 0, skipped: 0 });
-        expect(applied.get('a.txt')).toBe('favorite');
+        expect(applied.get('a.txt')).toBe('default');
         expect(applied.get('b.txt')).toBe('cloud');
         expect(st.emblemAll()).toEqual(new Map([
-            ['a.txt', 'favorite'],
+            ['a.txt', 'default'],
             ['b.txt', 'cloud'],
         ]));
     });
@@ -64,7 +64,7 @@ describe('syncEmblems', () => {
         expect(applied.size).toBe(0);
     });
 
-    test('state transitions flip the badge: evict -> cloud, hydrate -> star', async () => {
+    test('state transitions flip the badge: evict -> cloud, hydrate -> check', async () => {
         seedRow({ path: 'a.txt' });
         await syncEmblems(fakeApply(new Map()));
         st.onlineSet('a.txt');
@@ -74,7 +74,7 @@ describe('syncEmblems', () => {
         st.onlineDel('a.txt');
         applied = new Map();
         expect((await syncEmblems(fakeApply(applied))).set).toBe(1);
-        expect(applied.get('a.txt')).toBe('favorite');
+        expect(applied.get('a.txt')).toBe('default');
     });
 
     test('deleted rows clear the stored badge', async () => {
@@ -99,7 +99,7 @@ describe('syncEmblems', () => {
         fail = false;
         s = await syncEmblems(fakeApply(applied, behavior));
         expect(s).toEqual({ set: 1, unset: 0, failed: 0, skipped: 0 });
-        expect(st.emblemAll().get('a.txt')).toBe('favorite');
+        expect(st.emblemAll().get('a.txt')).toBe('default');
     });
 
     test('skipped applies (path absent, mount down) do not record and are retried', async () => {

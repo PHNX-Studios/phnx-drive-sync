@@ -137,11 +137,13 @@ non-keep-marked local files are evicted until the threshold clears, and a
 appear remotely materialize as placeholders instead of downloading (folders
 still materialize). Default `local` = download, as before.
 
-**Nautilus badges (cloud vs star).** Every synced file carries a badge via
+**Nautilus badges (cloud vs green check).** Every synced file carries a badge via
 the gvfs metadata store (`metadata::emblems` keyword → `emblem-<keyword>`
 icon): online-only placeholders show a **cloud**, materialized files a
-**star** — the badge tracks bytes-on-disk only (keep-marked files are stars
-too). Folders get none. The engine applies the diff after every pass and after
+**green check** (`emblem-default`, OneDrive-style "kept on this device";
+Yaru's `emblem-favorite` heart reads as "liked", not "synced") — the badge
+tracks bytes-on-disk only (keep-marked files get the check too). Folders get
+none. The engine applies the diff after every pass and after
 pin/unpin/evict/hydrate RPCs (concurrency 8), remembering the last applied
 badge per path in `state.db` so restarts and no-op passes spawn nothing;
 `DRIVE_SYNC_EMBLEMS=off` disables it entirely. Since Yaru ships no cloud

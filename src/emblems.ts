@@ -10,7 +10,9 @@ import * as st from './state';
 /**
  * Nautilus file badges via the gvfs metadata store (`metadata::emblems` keyword list
  * -> `emblem-<keyword>` icon). Online-only files get the cloud, materialized files the
- * star. state.db is the source of truth; the `emblem` table remembers what was last
+ * green check (`emblem-default` — OneDrive-style "kept on this device"; Yaru's
+ * `emblem-favorite` is a heart, which reads as "liked" rather than "synced").
+ * state.db is the source of truth; the `emblem` table remembers what was last
  * applied so restarts and no-op passes spawn nothing.
  *
  * Notes for the next reader:
@@ -24,7 +26,7 @@ import * as st from './state';
  */
 export function emblemFor(type: st.EntryType, online: boolean): string | null {
     if (type !== 'file') return null; // no badges on folders
-    return online ? 'cloud' : 'favorite';
+    return online ? 'cloud' : 'default';
 }
 
 /** Desired badge per synced path (files only). */
