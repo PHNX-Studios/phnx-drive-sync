@@ -12,9 +12,6 @@ UNIT_DIR="$HOME/.config/systemd/user"
 AUTOSTART_DIR="$HOME/.config/autostart"
 APPS_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
-# dev-checkout mount point on the external SSD (convenience automount only —
-# nothing at runtime depends on it anymore)
-SSD_MNT="${DRIVE_SYNC_SSD_MNT:-$HOME/Projects}"
 
 command -v rsync >/dev/null || { echo "install.sh: rsync is required" >&2; exit 1; }
 command -v bun >/dev/null || [ -x "$HOME/.bun/bin/bun" ] || {
@@ -72,19 +69,6 @@ mkdir -p "$NAUTILUS_SCRIPTS"
 install -m 755 "$SRC/tray/nautilus-scripts/Proton Drive/Free up Space" "$NAUTILUS_SCRIPTS/Free up Space"
 install -m 755 "$SRC/tray/nautilus-scripts/Proton Drive/Keep on This Device" "$NAUTILUS_SCRIPTS/Keep on This Device"
 
-# SSD automount (convenience only): resolve the UUID behind the dev-checkout
-# mount point; skip silently if it is not mounted right now
-if SSD_UUID="$(findmnt -n -o UUID --target "$SSD_MNT" 2>/dev/null)" && [ -n "$SSD_UUID" ]; then
-    echo "install: SSD automount unit (uuid $SSD_UUID on $SSD_MNT)"
-    sed "s/@SSD_UUID@/$SSD_UUID/g" \
-        "$SRC/packaging/systemd/user/proton-ssd-automount.service.in" \
-        > "$UNIT_DIR/proton-ssd-automount.service"
-    systemctl --user enable proton-ssd-automount.service
-else
-    echo "install: SSD not mounted at $SSD_MNT — skipping automount unit" >&2
-    rm -f "$UNIT_DIR/proton-ssd-automount.service"
-fi
-
 # remove pre-rename artifacts (old names) if present
 rm -f "$BIN/drive-sync" "$BIN/drive-sync-tray" "$BIN/drive-sync-tray-wait" \
       "$AUTOSTART_DIR/drive-sync-tray.desktop" \
@@ -93,15 +77,17 @@ rm -f "$BIN/drive-sync" "$BIN/drive-sync-tray" "$BIN/drive-sync-tray-wait" \
       "$ICON_DIR/drive-sync.svg" \
       "$UNIT_DIR/drive-sync.service" "$UNIT_DIR/drive-sync-tray.service" \
       "$UNIT_DIR/drive-sync.service.bak" "$UNIT_DIR/drive-sync.service.p3.bak"
+# superseded: SSD automount was extracted from this project (machine-local,
+# see storage-ssd-automount.service) — drop the old project-owned copy
+systemctl --user disable --now proton-ssd-automount.service 2>/dev/null || true
+rm -f "$UNIT_DIR/proton-ssd-automount.service"
 rm -rf "$HOME/.local/lib/drive-sync"
 
 systemctl --user daemon-reload
 systemctl --user enable proton-drive-sync.service proton-drive-sync-tray.service
-# mount the SSD now too if it is attached (no-op when already mounted)
-systemctl --user start proton-ssd-automount.service 2>/dev/null || true
 # restart (not just --now) so a re-install picks up the new code; the engine
 # remounts the FUSE sidecar itself within seconds
 systemctl --user restart proton-drive-sync.service proton-drive-sync-tray.service
 
 echo "install: done — units active:"
-systemctl --user is-active proton-drive-sync.service proton-drive-sync-tray.service proton-ssd-automount.service 2>/dev/null || true
+systemctl --user is-active proton-drive-sync.service proton-drive-sync-tray.service

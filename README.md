@@ -41,12 +41,7 @@ sources) to `~/.local/lib/proton-drive-sync/` on the **internal disk** and point
 systemd user units and XDG autostart there — startup never waits on the
 external SSD (`~/Projects` is a dev checkout; state the engine manages already
 lives under `~/.local`). Re-run it after changing runtime code in the
-checkout. As a convenience for the dev checkout, the installer also renders
-`proton-ssd-automount.service` (user unit, UUID of the currently-mounted
-external SSD) so the drive is mounted at login without opening Files — GNOME
-only automounts drives that appear *after* the session starts. Nothing at
-runtime depends on that mount; if the drive is unplugged the unit simply
-stays inactive.
+checkout.
 
 Auto-start: the service is `enabled`, so it starts at login; the tray is
 autostarted via `~/.config/autostart/proton-drive-sync-tray.desktop` and also via `proton-drive-sync-tray.service` user unit for resilience. If the engine
