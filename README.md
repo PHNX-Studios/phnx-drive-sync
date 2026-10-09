@@ -1,4 +1,4 @@
-# drive-sync
+# proton-drive-sync
 
 Bidirectional sync engine between `~/Proton Drive` and Proton Drive (`/my-files`),
 built directly on the official [Proton Drive SDK](https://github.com/ProtonDriveApps/sdk)
@@ -10,15 +10,15 @@ Requires: [bun](https://bun.sh) and an authenticated session via the official
 ## Usage
 
 ```sh
-./drive-sync.sh run            # daemon: initial full pass, then events + watcher + interval
-./drive-sync.sh once           # single full pass (exit 0 ok, 2 errors, 3 auth)
-./drive-sync.sh once --dry-run # classify only: report planned actions, change nothing
-./drive-sync.sh status         # print status.json
-./drive-sync.sh unpin <paths…> # free local space; files stay on Proton Drive
-./drive-sync.sh pin <paths…>   # download online-only files back to this device
-./drive-sync.sh evict [paths…] # bulk "Free up space": no paths = every local file
-./drive-sync.sh prefetch on|off|status  # recall-on-hover toggle (default off)
-./drive-sync.sh restart         # systemctl --user restart + notification
+./proton-drive-sync.sh run            # daemon: initial full pass, then events + watcher + interval
+./proton-drive-sync.sh once           # single full pass (exit 0 ok, 2 errors, 3 auth)
+./proton-drive-sync.sh once --dry-run # classify only: report planned actions, change nothing
+./proton-drive-sync.sh status         # print status.json
+./proton-drive-sync.sh unpin <paths…> # free local space; files stay on Proton Drive
+./proton-drive-sync.sh pin <paths…>   # download online-only files back to this device
+./proton-drive-sync.sh evict [paths…] # bulk "Free up space": no paths = every local file
+./proton-drive-sync.sh prefetch on|off|status  # recall-on-hover toggle (default off)
+./proton-drive-sync.sh restart         # systemctl --user restart + notification
 ```
 
 `pin`/`unpin`/`evict` talk to the running daemon over a unix socket (`rpc.sock`),
@@ -31,14 +31,27 @@ stdout/stderr).
 systemd (user):
 
 ```sh
-systemctl --user enable --now drive-sync.service
-journalctl --user -u drive-sync.service -f
+./packaging/install.sh       # deploy runtime to ~/.local/lib/proton-drive-sync + wire units/autostart
+systemctl --user enable --now proton-drive-sync.service
+journalctl --user -u proton-drive-sync.service -f
 ```
 
+`packaging/install.sh` copies the runtime (engine, sidecar, tray, vendored SDK
+sources) to `~/.local/lib/proton-drive-sync/` on the **internal disk** and points the
+systemd user units and XDG autostart there — startup never waits on the
+external SSD (`~/Projects` is a dev checkout; state the engine manages already
+lives under `~/.local`). Re-run it after changing runtime code in the
+checkout. As a convenience for the dev checkout, the installer also renders
+`proton-ssd-automount.service` (user unit, UUID of the currently-mounted
+external SSD) so the drive is mounted at login without opening Files — GNOME
+only automounts drives that appear *after* the session starts. Nothing at
+runtime depends on that mount; if the drive is unplugged the unit simply
+stays inactive.
+
 Auto-start: the service is `enabled`, so it starts at login; the tray is
-autostarted via `~/.config/autostart/drive-sync-tray.desktop` (mount-safe wrapper) and also via `drive-sync-tray.service` user unit for resilience. If the engine
-ever needs a manual kick, **Drive Sync (restart engine)** in the application
-menu (and on the Desktop) runs `drive-sync.sh restart` — restarts the service,
+autostarted via `~/.config/autostart/proton-drive-sync-tray.desktop` and also via `proton-drive-sync-tray.service` user unit for resilience. If the engine
+ever needs a manual kick, **Proton Drive Sync (restart engine)** in the application
+menu (and on the Desktop) runs `proton-drive-sync.sh restart` — restarts the service,
 waits for the FUSE heartbeat to come back, and reports the result via
 `notify-send`. If the sidecar dies while the engine runs, the engine relaunches
 it automatically within seconds (see `mount` in `status.json`); the tray's
@@ -47,14 +60,14 @@ it automatically within seconds (see `mount` in `status.json`); the tray's
 Tray icon (live status, storage, controls — autostarted):
 
 ```sh
-tray/drive-sync-tray.py   # status, used/free storage, Sync now, Pause/Resume, log
+tray/proton-drive-sync-tray.py   # status, used/free storage, Sync now, Pause/Resume, log
 ```
 
 - **Sync now** sends the daemon `SIGUSR1` (runs an immediate incremental pass,
   ~0.5 s) or starts the unit if paused.
-- **Pause/Resume** stops/starts `drive-sync.service`.
+- **Pause/Resume** stops/starts `proton-drive-sync.service`.
 - **Free up space (all local files)** appears whenever there is reclaimable
-  space and runs the same bulk evict as `drive-sync.sh evict` (keep-marked and
+  space and runs the same bulk evict as `proton-drive-sync.sh evict` (keep-marked and
   unsynced files stay local).
 - Icon states: idle (green), syncing (orange, incl. long full walks), error
   (red: service failed / auth required / last pass errored), paused (grey).
@@ -95,15 +108,15 @@ see zero-fill: reading a placeholder blocks, downloads the content from the
 baseline (byte-identical) and materializes the file — OneDrive recall
 semantics. Writes to a placeholder materialize first, then write.
 
-- `drive-sync.sh unpin 'path/…'` — after ensuring the latest local bytes are
+- `proton-drive-sync.sh unpin 'path/…'` — after ensuring the latest local bytes are
   synced, marks the file online-only and drops the local bytes. It stays
   visible through the mount; the next open/recall re-downloads it.
-- `drive-sync.sh pin 'path/…'` — recall explicitly (download + clear the mark),
+- `proton-drive-sync.sh pin 'path/…'` — recall explicitly (download + clear the mark),
   byte-identical from the baseline (uid/size/mtime). `pin` also sets a
   **keep-on-this-device** mark: auto-eviction and bulk free will never touch
   that file until an `unpin` (or a free-up-space) clears the mark — last
   explicit instruction wins.
-- `drive-sync.sh evict [path/…]` — bulk *Free up space* (no paths = every
+- `proton-drive-sync.sh evict [path/…]` — bulk *Free up space* (no paths = every
   materialized file). Only clean, synced, non-keep-marked files are freed,
   largest first; unsynced edits and keep-marked files stay local. The same
   action is available from the tray menu.
@@ -112,7 +125,7 @@ semantics. Writes to a placeholder materialize first, then write.
   moves into the local `.Trash-<uid>` (never synced) and is trashed remotely
   on the next pass.
 
-**Recall on hover (prefetch, default off).** With `drive-sync.sh prefetch on`,
+**Recall on hover (prefetch, default off).** With `proton-drive-sync.sh prefetch on`,
 any lookup of a placeholder through the mount (hover, preview, directory stat)
 queues a background download instead of waiting for the first open; two
 downloads run in parallel, the rest queue. `prefetch off` (the default)
@@ -184,7 +197,8 @@ The engine itself additionally never syncs `.protonignore` or `*.drivesync.part`
 | daemon pid lock | `~/.local/state/drive-sync/daemon.lock` (stale-aware) |
 | pin/unpin rpc socket | `~/.local/state/drive-sync/rpc.sock` (unlinked at boot/shutdown) |
 | sidecar heartbeat (tray mount check) | `~/.local/state/drive-sync/mount-ok` |
-| tray icon + icons | `~/Projects/drive-sync/tray/` (autostart: `~/.config/autostart/drive-sync-tray.desktop`) |
+| tray icon + icons | `~/.local/lib/proton-drive-sync/tray/` (launcher: `~/.local/bin/proton-drive-sync-tray`; autostart: `~/.config/autostart/proton-drive-sync-tray.desktop`) |
+| installed runtime (internal disk) | `~/.local/lib/proton-drive-sync/` (`packaging/install.sh`; SSD checkout = dev tree only) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
 last pass info, error counts, the recall-on-hover `prefetch` toggle, and
@@ -217,7 +231,7 @@ interval — re-login with the official CLI:
 cd vendor/cli && bun install        # bootstrap deps (node_modules is a symlink into vendor)
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
 bun test test/                      # classify/placeholder/evict unit tests (temp state)
-./drive-sync.sh once --dry-run      # classify without changing anything
+./proton-drive-sync.sh once --dry-run      # classify without changing anything
 ```
 
 ## Known caveats

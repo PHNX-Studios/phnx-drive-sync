@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FUSE sidecar for drive-sync Phase 2 (visible placeholders).
+"""FUSE sidecar for Proton Drive Sync Phase 2 (visible placeholders).
 
 Serves the user-facing mount (--mount) from the real tree (--tree) plus the
 sync baseline (--db, read-only):
@@ -593,7 +593,7 @@ def main():
 
     os.makedirs(MOUNT, exist_ok=True)
     options = set(pyfuse3.default_options)
-    options.add('fsname=drive-sync')
+    options.add('fsname=proton-drive-sync')
     pyfuse3.init(Ops(), MOUNT, options)
     touch_mount_ok()
     logging.info('mounted %s (tree=%s)', MOUNT, TREE)

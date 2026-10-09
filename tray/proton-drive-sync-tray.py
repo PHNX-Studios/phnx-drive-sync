@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Proton Drive Sync tray icon: live status, storage and controls for drive-sync.service."""
+"""Proton Drive Sync tray icon: live status, storage and controls for proton-drive-sync.service."""
 
 import fcntl
 import json
@@ -23,7 +23,7 @@ gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import AyatanaAppIndicator3 as AppIndicator3
 from gi.repository import GLib, Gtk
 
-SYNC_UNIT = "drive-sync.service"
+SYNC_UNIT = "proton-drive-sync.service"
 SYNC_DIR = os.path.expanduser("~/Proton Drive")
 ICON_DIR = os.path.join(_HERE, "icons")
 STATE_DIR = os.path.expanduser("~/.local/state/drive-sync")
@@ -34,10 +34,10 @@ MOUNT_STALE_S = 15  # sidecar heartbeats every 2s; anything older means it died
 EVICT_LABEL = "Free up space (all local files)"
 
 ICONS = {
-    "idle": "drive-sync-idle",
-    "syncing": "drive-sync-syncing",
-    "error": "drive-sync-error",
-    "paused": "drive-sync-paused",
+    "idle": "proton-drive-sync-idle",
+    "syncing": "proton-drive-sync-syncing",
+    "error": "proton-drive-sync-error",
+    "paused": "proton-drive-sync-paused",
 }
 
 STATE = {"state": "idle", "detail": "Starting...", "active": False, "evicting": False}
@@ -127,7 +127,7 @@ def storage_detail(status):
 
 
 def rpc_call(op, paths, timeout=15 * 60):
-    """Talk to the drive-sync daemon over its unix socket (pin/unpin/evict/prefetch...)."""
+    """Talk to the proton-drive-sync daemon over its unix socket (pin/unpin/evict/prefetch...)."""
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
@@ -320,7 +320,7 @@ def poll():
 
 
 def main():
-    lock_path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "drive-sync-tray.lock")
+    lock_path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "proton-drive-sync-tray.lock")
     lock_handle = open(lock_path, "w")
     try:
         fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -330,7 +330,7 @@ def main():
     global indicator, status_item, storage_item, pause_item, evict_item
 
     indicator = AppIndicator3.Indicator.new(
-        "drive-sync", ICONS["idle"], AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
+        "proton-drive-sync", ICONS["idle"], AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
     )
     indicator.set_icon_theme_path(ICON_DIR)
     indicator.set_title("Proton Drive Sync")

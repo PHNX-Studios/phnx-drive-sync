@@ -14,7 +14,7 @@ if [ "${#files[@]}" -eq 0 ]; then
     exit 0
 fi
 
-out="$("$HOME/Projects/drive-sync/drive-sync.sh" unpin "${files[@]}" 2>&1)"
+out="$("$HOME/.local/bin/proton-drive-sync" unpin "${files[@]}" 2>&1)"
 rc=$?
 
 if command -v notify-send >/dev/null 2>&1; then
