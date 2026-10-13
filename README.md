@@ -55,8 +55,13 @@ it automatically within seconds (see `mount` in `status.json`); the tray's
 Tray icon (live status, storage, controls — autostarted):
 
 ```sh
-tray/proton-drive-sync-tray.py   # status, used/free storage, Sync now, Pause/Resume, log
+tray/proton-drive-sync-tray.py   # 2x2 status grid, Actions submenu, Pause/Resume
 ```
+
+The menu shows a 2x2 status grid (sync status | storage, online-only |
+reclaimable) followed by an **Actions** submenu (Sync now, Open folder, Show
+last log, Free up space) and Pause/Resume + Quit. While a pass runs the status
+cell tracks the current item and its `(done/total)` progress.
 
 - **Sync now** sends the daemon `SIGUSR1` (runs an immediate incremental pass,
   ~0.5 s) or starts the unit if paused.
@@ -203,20 +208,23 @@ last pass info, error counts, the recall-on-hover `prefetch` toggle, and
 bulk free could still reclaim — what the tray storage line shows), plus
 `storage: {used, max, driveUsed, fetchedAt}` (account quota from
 `/core/v4/users`, refreshed on startup and at most every 5 min during passes —
-read by the tray icon).
+read by the tray icon). While a pass runs, `progress: {current, done, total}`
+names the item in flight (`null` when idle); the tray shows it with an
+`(done/total)` counter under the status line.
 
 Env overrides: `DRIVE_SYNC_ROOT` (mount point), `DRIVE_SYNC_TREE` (real tree
 location), `DRIVE_SYNC_REMOTE` (path under *My files*,
 default: whole drive), `DRIVE_SYNC_HOME` (relocate all state — used for isolated
-tests), `DRIVE_SYNC_INTERVAL_MS` (60 s), `DRIVE_SYNC_FULL_EVERY` (10 passes),
-`DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `DRIVE_SYNC_NEW_FILES` (`local`|`online`),
+tests), `DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `DRIVE_SYNC_NEW_FILES` (`local`|`online`),
 `DRIVE_SYNC_EVICT_FREE_GB` (auto-evict threshold, 0 = off),
 `DRIVE_SYNC_PREFETCH` (sidecar recall-on-hover default, off unless set).
 
 A full remote walk of the current tree (~10.3k nodes, 1.27k folders) takes
-~5 min warm; systemd unit runs fallback intervals at 2 min with a full walk
-every 30 min. Watcher (inotifywait) and the event stream trigger passes within
-seconds of a change; the interval pass is only a safety net.
+~5 min warm, so it runs **once at login** (the initial pass), and afterwards
+only when the event stream reports a gap and asks for a resync. Everything
+else is incremental: the watcher (inotifywait) and the remote event stream
+trigger passes within seconds of a change, and *Sync now* forces one on
+demand. There is no periodic poller.
 
 Auth failures surface in `status.json` (`auth-required`) and are retried each
 interval — re-login with the official CLI:

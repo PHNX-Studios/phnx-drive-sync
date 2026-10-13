@@ -43,10 +43,19 @@ ICONS = {
 STATE = {"state": "idle", "detail": "Starting...", "active": False, "evicting": False}
 
 indicator = None
-status_item = None
-storage_item = None
+info_primary = None
+info_secondary = None
+actions_item = None
 pause_item = None
 evict_item = None
+
+def info_row(left, right, sep=" - "):
+    """One menu row holding two info cells joined by a separator."""
+    if not left:
+        return right
+    if not right:
+        return left
+    return f"{left}{sep}{right}"
 
 
 def unit_props(*props):
@@ -105,25 +114,38 @@ def human_bytes(n):
     return f"{value:.1f} TB"
 
 
-def storage_detail(status):
+def storage_fields(status):
+    """Split storage/count info into the three cells of the 2x2 status grid."""
     storage = status.get("storage")
     counts = status.get("counts") or {}
-    bits = []
     if isinstance(storage, dict) and storage.get("max"):
         used = storage.get("used", 0)
         maximum = storage.get("max", 0)
-        free = max(0, maximum - used)
-        bits.append(f"{human_bytes(used)} used · {human_bytes(free)} free")
+        used_text = f"{human_bytes(used)} of {human_bytes(maximum)} used"
+    else:
+        used_text = "Storage not reported yet"
     placeholders = counts.get("placeholders")
-    if isinstance(placeholders, int) and placeholders > 0:
-        line = f"{placeholders} online-only"
-        reclaimable = counts.get("reclaimable")
-        if isinstance(reclaimable, int) and reclaimable > 0:
-            line += f" · {human_bytes(reclaimable)} reclaimable"
-        bits.append(line)
-    if not bits:
-        return "Storage: not reported yet"
-    return "Storage: " + " · ".join(bits)
+    online_text = f"{placeholders} online-only" if isinstance(placeholders, int) and placeholders > 0 else ""
+    reclaimable = counts.get("reclaimable")
+    reclaim_text = (
+        f"{human_bytes(reclaimable)} reclaimable" if isinstance(reclaimable, int) and reclaimable > 0 else ""
+    )
+    return used_text, online_text, reclaim_text
+
+
+def sync_progress_text(status):
+    """Current item + item-count progress for the in-flight pass, or None."""
+    progress = status.get("progress")
+    if not isinstance(progress, dict):
+        return None
+    current = progress.get("current")
+    if not current:
+        return None
+    total = progress.get("total") or 0
+    done = progress.get("done") or 0
+    if total > 0:
+        return f"{current} ({done}/{total})"
+    return current
 
 
 def rpc_call(op, paths, timeout=15 * 60):
@@ -180,10 +202,11 @@ def fetch_state():
     status = read_status()
     engine = status.get("state") or ""
     last_rel = relative_time(status.get("lastPassAt"))
+    progress_text = sync_progress_text(status)
 
     active = run.get("ActiveState") == "active"
     if run.get("ActiveState") in ("activating", "reloading") or engine == "passing":
-        state, detail = "syncing", "Syncing now..."
+        state, detail = "syncing", progress_text or "Syncing now..."
     elif run.get("ActiveState") == "failed":
         state = "error"
         detail = f"Sync service failed (exit {run.get('ExecMainStatus') or '?'}) - check log"
@@ -200,15 +223,18 @@ def fetch_state():
         else:
             state, detail = "idle", f"Synced {last_rel}"
     else:
-        state, detail = "syncing", "Syncing now..."
+        state, detail = "syncing", progress_text or "Syncing now..."
 
     if mount_degraded(active) and state in ("idle", "syncing"):
         state, detail = "error", "Mount degraded - folder not available"
 
+    used_text, online_text, reclaim_text = storage_fields(status)
     return {
         "state": state,
         "detail": detail,
-        "storage": storage_detail(status),
+        "used": used_text,
+        "online": online_text,
+        "reclaim": reclaim_text,
         "active": active,
         "failed": run.get("ActiveState") == "failed",
         "reclaimable": counts_reclaimable(status),
@@ -309,8 +335,8 @@ def poll():
     if getattr(poll, "_icon", None) != icon:
         indicator.set_icon(icon)
         poll._icon = icon
-    status_item.set_label(state["detail"])
-    storage_item.set_label(state["storage"])
+    info_primary.set_label(info_row(state["detail"], state["used"]))
+    info_secondary.set_label(info_row(state["online"], state["reclaim"]))
     pause_item.set_label("Resume syncing" if not state["active"] else "Pause syncing")
     # bulk free: only worth offering while the mount is up and there is something to free
     want_evict = state["active"] and (STATE.get("evicting") or state.get("reclaimable", 0) > 0)
@@ -327,7 +353,7 @@ def main():
     except OSError:
         sys.exit(0)
 
-    global indicator, status_item, storage_item, pause_item, evict_item
+    global indicator, info_primary, info_secondary, actions_item, pause_item, evict_item
 
     indicator = AppIndicator3.Indicator.new(
         "proton-drive-sync", ICONS["idle"], AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
@@ -338,30 +364,38 @@ def main():
 
     menu = Gtk.Menu()
 
-    status_item = Gtk.MenuItem(label="Starting...")
-    status_item.set_sensitive(False)
-    menu.append(status_item)
+    # status grid: two rows, two cells each (status | storage, online-only | reclaimable)
+    info_primary = Gtk.MenuItem(label="Starting...")
+    info_primary.set_sensitive(False)
+    menu.append(info_primary)
 
-    storage_item = Gtk.MenuItem(label="Storage: ...")
-    storage_item.set_sensitive(False)
-    menu.append(storage_item)
+    info_secondary = Gtk.MenuItem(label="")
+    info_secondary.set_sensitive(False)
+    menu.append(info_secondary)
     menu.append(Gtk.SeparatorMenuItem())
+
+    # actions live in a submenu to keep the top level compact
+    actions_item = Gtk.MenuItem(label="Actions")
+    actions_menu = Gtk.Menu()
+    actions_item.set_submenu(actions_menu)
 
     sync_now_item = Gtk.MenuItem(label="Sync now")
     sync_now_item.connect("activate", sync_now)
-    menu.append(sync_now_item)
+    actions_menu.append(sync_now_item)
 
     open_item = Gtk.MenuItem(label="Open Proton Drive folder")
     open_item.connect("activate", open_folder)
-    menu.append(open_item)
+    actions_menu.append(open_item)
 
     log_item = Gtk.MenuItem(label="Show last log")
     log_item.connect("activate", show_log)
-    menu.append(log_item)
+    actions_menu.append(log_item)
 
     evict_item = Gtk.MenuItem(label=EVICT_LABEL)
     evict_item.connect("activate", free_up_space)
-    menu.append(evict_item)
+    actions_menu.append(evict_item)
+
+    menu.append(actions_item)
     menu.append(Gtk.SeparatorMenuItem())
 
     pause_item = Gtk.MenuItem(label="Pause syncing")
@@ -372,6 +406,7 @@ def main():
     quit_item.connect("activate", lambda *_: Gtk.main_quit())
     menu.append(quit_item)
 
+    actions_menu.show_all()
     menu.show_all()
     evict_item.set_visible(False)  # poll() reveals it when there is reclaimable space
     indicator.set_menu(menu)

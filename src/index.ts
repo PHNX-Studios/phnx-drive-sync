@@ -1,7 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
-import { lockFile, localRoot, passIntervalMs, prefetchDefault, shareDir, stateDir, statusFile, treeRoot } from './config';
+import { lockFile, localRoot, prefetchDefault, shareDir, stateDir, statusFile, treeRoot } from './config';
 import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
@@ -413,12 +413,12 @@ async function daemon(): Promise<void> {
         setStatus({ state: 'passing' });
         try {
             const s = await runPass({ forceFull: false });
-            if (s.authFailed) log('ERROR', 'authentication required; will retry each interval (re-login via the official proton-drive CLI if this persists)');
+            if (s.authFailed) log('ERROR', 'authentication required; will retry on the next change (re-login via the official proton-drive CLI if this persists)');
             maybeAutoEvict(new Set(hydrating.keys()));
             kickEmblems();
         } catch (e) {
             log('ERROR', 'pass crashed', e);
-            setStatus({ state: 'running', lastError: e instanceof Error ? e.message : String(e) });
+            setStatus({ state: 'running', progress: null, lastError: e instanceof Error ? e.message : String(e) });
         } finally {
             passing = false;
             if (pending) {
@@ -436,6 +436,7 @@ async function daemon(): Promise<void> {
     log('INFO', 'initial full pass...');
     passing = true;
     lastPassStartedAt = Date.now();
+    setStatus({ state: 'passing' });
     try {
         const s = await runPass({ forceFull: true });
         if (s.authFailed) throw new Error(`initial sync failed: ${s.lastError}`);
@@ -445,7 +446,7 @@ async function daemon(): Promise<void> {
     setStatus({ state: 'running', prefetch: prefetchEffective() });
     maybeAutoEvict(new Set(hydrating.keys()));
     kickEmblems();
-    log('INFO', 'initial pass done; starting event loop, watcher and interval');
+    log('INFO', 'initial pass done; starting event loop and watcher (no periodic full walk)');
 
     // Ensure at least one pass has *started and finished* after the call time.
     const ensureFresh = async (): Promise<void> => {
@@ -544,7 +545,6 @@ async function daemon(): Promise<void> {
         loadFilters();
         schedule(3000);
     });
-    const interval = setInterval(() => schedule(0), passIntervalMs);
 
     await new Promise<void>((resolve) => {
         const shutdown = (sig: string): void => {
@@ -553,7 +553,6 @@ async function daemon(): Promise<void> {
             syncNowHook = null;
             log('INFO', `${sig} received; shutting down`);
             if (timer) clearTimeout(timer);
-            clearInterval(interval);
             stopWatch();
             remote.stopEventLoop();
             stopRpcServer();

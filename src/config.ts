@@ -22,8 +22,6 @@ export const rpcSocket = path.join(stateDir, 'rpc.sock');
 export const filtersFile = path.join(treeRoot, '.protonignore');
 export const partialSuffix = '.drivesync.part';
 
-export const passIntervalMs = Number(process.env.DRIVE_SYNC_INTERVAL_MS || 60_000);
-export const fullWalkEvery = Math.max(1, Number(process.env.DRIVE_SYNC_FULL_EVERY || 10));
 export const modifyWindowMs = 1_500;
 export const seedAdoptWindowMs = 10_000;
 export const eventIdleTimeoutMs = Number(process.env.DRIVE_SYNC_EVENT_IDLE_MS || 20_000);

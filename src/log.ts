@@ -13,6 +13,16 @@ export interface StorageInfo {
     fetchedAt: string;
 }
 
+/** Live sync progress: the item being worked on and how far through the pass we are. */
+export interface SyncProgress {
+    /** Human-readable description of the current item (e.g. "Uploading photos/a.jpg"). */
+    current: string;
+    /** 1-based position of the current item; 0 while still scanning for changes. */
+    done: number;
+    /** Total items queued for this pass; 0 while still scanning for changes. */
+    total: number;
+}
+
 export interface StatusShape {
     pid: number;
     state: string;
@@ -21,6 +31,8 @@ export interface StatusShape {
     lastError: string | null;
     eventsDrained: number;
     storage: StorageInfo | null;
+    /** current item + item-count progress of the in-flight pass; null when idle */
+    progress: SyncProgress | null;
     /** recall-on-hover/prefetch toggle (state.db meta override, else DRIVE_SYNC_PREFETCH) */
     prefetch: boolean;
     /** FUSE mount health: the sidecar can die while the engine keeps running */
@@ -46,6 +58,7 @@ export const status: StatusShape = {
     lastError: null,
     eventsDrained: 0,
     storage: null,
+    progress: null,
     prefetch: prefetchDefault(),
     mount: 'ok',
     counts: { tracked: 0, uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0, placeholders: 0, reclaimable: 0 },

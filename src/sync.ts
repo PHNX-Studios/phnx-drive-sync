@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 
-import { fullWalkEvery, modifyWindowMs, newFilesMode, seedAdoptWindowMs, treeRoot } from './config';
+import { modifyWindowMs, newFilesMode, seedAdoptWindowMs, treeRoot } from './config';
 import { log, setStatus } from './log';
 import * as remote from './remote';
 import * as st from './state';
@@ -411,13 +411,49 @@ function isEnotempty(e: unknown): boolean {
     return code === 'ENOTEMPTY' || code === 'EEXIST';
 }
 
+function describeAction(a: Action): string {
+    switch (a.phase) {
+        case 'mkdirLocal':
+        case 'mkdirRemote':
+            return `Creating folder ${a.p}`;
+        case 'renameLocal':
+        case 'renameRemote':
+            return `Renaming ${a.from} to ${a.to}`;
+        case 'download':
+            return `Downloading ${a.p}`;
+        case 'adoptOnline':
+            return `Adding ${a.p}`;
+        case 'upload':
+            return `Uploading ${a.p}`;
+        case 'conflict':
+            return `Resolving conflict ${a.p}`;
+        case 'rmLocal':
+        case 'trashRemote':
+            return `Deleting ${a.p}`;
+    }
+}
+
 async function execute(
     actions: Action[],
     R: Map<string, st.CacheRow>,
     s: PassStats,
 ): Promise<void> {
     const trashedDirs: string[] = [];
-    for (const a of sortActions(actions)) {
+    const ordered = sortActions(actions);
+    const total = ordered.length;
+    let done = 0;
+    let lastReported = 0;
+    // status.json is rewritten on every report; throttle so a huge pass does not
+    // hammer the disk (the tray only polls every 5 s anyway)
+    const report = (a: Action): void => {
+        const now = Date.now();
+        if (now - lastReported < 250 && done < total) return;
+        lastReported = now;
+        setStatus({ progress: { current: describeAction(a), done, total } });
+    };
+    for (const a of ordered) {
+        done++;
+        report(a);
         try {
             switch (a.phase) {
                 case 'mkdirLocal': {
@@ -585,6 +621,7 @@ async function execute(
             }
         }
     }
+    if (total > 0) setStatus({ progress: null });
 }
 
 export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Promise<PassStats> {
@@ -592,8 +629,13 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
     const t0 = Date.now();
     const s: PassStats = { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, adopts: 0, errors: 0, lastError: null, authFailed: false };
 
+    if (!dry) setStatus({ progress: { current: 'Scanning for changes', done: 0, total: 0 } });
+
     let R: Map<string, st.CacheRow>;
-    const wantFull = opts.forceFull || remote.takeForceFull() || passCount % fullWalkEvery === 0;
+    // A full remote walk happens once at login (the initial forced pass) and only
+    // again when the event stream explicitly asks for it (gap/recovery). Everything
+    // else is an incremental pass driven by the file watcher and remote events.
+    const wantFull = opts.forceFull || remote.takeForceFull();
     try {
         if (wantFull) {
             const walked = await remote.walkRemoteMap();
@@ -608,7 +650,7 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
         s.lastError = remote.errMsg(e);
         if (remote.isAuthError(e)) {
             s.authFailed = true;
-            setStatus({ state: 'auth-required', lastError: s.lastError });
+            setStatus({ state: 'auth-required', lastError: s.lastError, progress: null });
             log('ERROR', `auth failure during remote scan: ${s.lastError}`);
             return s;
         }
@@ -661,6 +703,7 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
 
     setStatus({
         state: s.authFailed ? 'auth-required' : 'running',
+        progress: null,
         lastPassAt: new Date().toISOString(),
         lastPassMs: Date.now() - t0,
         lastError: s.lastError,
