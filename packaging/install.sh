@@ -349,6 +349,49 @@ if command -v python3 >/dev/null 2>&1 && ! PYTHONPATH="$PYDIR${PYTHONPATH:+:$PYT
     fi
 fi
 
+# --- FUSE readiness (files-on-demand needs the system fuse3 stack) ---------
+# Mounting requires the setuid-root fusermount3 helper, which only the system
+# fuse3 package can provide (a user-level copy cannot be setuid), so this is the
+# one dependency the no-root fallback cannot cover. Report the outcome here
+# rather than let the user discover an empty mount later.
+fuse_check() {
+    local ok=1 hint perms
+    case "$PKG_MGR" in
+        apt-get) hint="sudo apt install fuse3" ;;
+        dnf) hint="sudo dnf install fuse3" ;;
+        yum) hint="sudo yum install fuse3" ;;
+        zypper) hint="sudo zypper install fuse3" ;;
+        pacman) hint="sudo pacman -S fuse3" ;;
+        *) hint="install the fuse3 package" ;;
+    esac
+    if [ ! -e /dev/fuse ]; then
+        warn "FUSE: /dev/fuse is missing (the fuse kernel module is not loaded)"
+        ok=0
+    fi
+    if ! command -v fusermount3 >/dev/null 2>&1 && [ ! -x /usr/bin/fusermount3 ] && [ ! -x /bin/fusermount3 ]; then
+        warn "FUSE: fusermount3 not installed; the mount needs it  [$hint]"
+        ok=0
+    fi
+    if command -v python3 >/dev/null 2>&1 && ! PYTHONPATH="$PYDIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'import pyfuse3' >/dev/null 2>&1; then
+        warn "FUSE: pyfuse3 is not importable; install python3-pyfuse3 (or 'pip install --user pyfuse3')"
+        ok=0
+    fi
+    if [ -e /dev/fuse ] && [ "$(id -u)" -ne 0 ]; then
+        perms="$(stat -c '%a' /dev/fuse 2>/dev/null || true)"
+        if [ "$perms" = "660" ] && ! id -nG 2>/dev/null | tr ' ' '\n' | grep -qx fuse; then
+            warn "FUSE: /dev/fuse is group-only; add yourself to the 'fuse' group and re-login  [sudo usermod -aG fuse \"$USER\"]"
+            ok=0
+        fi
+    fi
+    if [ "$ok" -eq 1 ]; then
+        log "FUSE files-on-demand: ready"
+    else
+        warn "  The engine still syncs (plain bidirectional sync); ~/Proton Drive stays empty until then (the tray shows 'Mount degraded')."
+    fi
+}
+
+fuse_check
+
 # --- detect a usable systemd user session (wiring + safe upgrade) ---------
 SYSTEMD_USER=0
 if command -v systemctl >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/systemd/private" ]; then

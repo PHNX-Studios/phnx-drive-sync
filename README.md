@@ -21,6 +21,13 @@ pieces that matter most are fetched into `~/.local` without root: `inotify-tools
 (the fast file watcher) and the Ayatana AppIndicator typelib (the tray icon).
 Everything else degrades gracefully on its own.
 
+Installation ends with a **FUSE readiness report**. Files-on-demand needs the
+system FUSE stack (`/dev/fuse`, the setuid `fusermount3`, `libfuse3`/`pyfuse3`),
+and `fusermount3` cannot be provided without root, so that part is only set up on
+the elevated path. If it is missing, the installer says exactly what to install;
+the engine still performs full bidirectional sync, but `~/Proton Drive` stays
+empty (the tray shows "Mount degraded").
+
 ```sh
 tar xzf proton-drive-sync-<version>-linux-<arch>.tar.gz
 cd proton-drive-sync-<version>-linux-<arch>
