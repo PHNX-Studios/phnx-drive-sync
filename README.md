@@ -17,11 +17,9 @@ Requires: [bun](https://bun.sh) and an authenticated session via the official
 
 ## Install
 
-> **Pre-release.** No release tarballs are published yet. Until the first
-> release is uploaded, build one locally with `bash packaging/build.sh` and run
-> the resulting `dist/phnx-drive-sync-<version>-linux-<arch>.tar.gz` installer.
-
-Download the release tarball for your architecture, then run its installer. It
+Download the release tarball for your architecture from the
+[releases page](https://github.com/PHNX-Studios/phnx-drive-sync/releases), then
+run its installer. It
 is self-contained: the engine and the official login CLI are compiled to single
 binaries (Bun runtime + all dependencies embedded, glibc 2.17+), and the
 installer wires up systemd user units, autostart, icons and the Nautilus
@@ -58,7 +56,9 @@ downgrade, no-ops on the same version, and preserves all state under
 
 `phnx-drive-sync update` trusts the configured release host over TLS and
 verifies the tarball's SHA-256 from the release manifest before running the
-installer (as the ordinary user). It refuses releases whose `min_glibc`/
+installer (as the ordinary user). The manifest is arch-aware: it carries an
+entry per architecture (`x86_64`, `aarch64`) and the updater picks the one
+matching the running binary. It refuses releases whose `min_glibc`/
 `min_kernel`/`min_python` exceed the host, so an old machine is never handed a
 binary it cannot run. Point it at a mirror with `DRIVE_SYNC_RELEASE_URL` or
 `update --url <manifest>`.

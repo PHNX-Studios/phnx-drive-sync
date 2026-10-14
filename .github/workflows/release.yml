@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ ubuntu-24.04, ubuntu-24.04-arm ]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install vendored dependencies
+        run: |
+          for d in vendor/cli vendor/client/js vendor/incubating/account/js; do
+            ( cd "$d" && bun install --frozen-lockfile )
+          done
+
+      - name: Build portable tarball
+        run: bash packaging/build.sh
+
+      - name: Upload tarball + manifest fragment
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.runner }}
+          path: |
+            dist/*.tar.gz
+            dist/latest-*.json
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Merge per-arch manifests
+        run: bun packaging/merge-manifests.mjs latest.json dist/latest-*.json
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*.tar.gz latest.json

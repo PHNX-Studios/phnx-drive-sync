@@ -21,14 +21,42 @@ const DEFAULT_MANIFEST_URL =
     process.env.DRIVE_SYNC_RELEASE_URL ??
     'https://github.com/PHNX-Studios/phnx-drive-sync/releases/latest/download/latest.json';
 
-export interface ReleaseManifest {
-    version: string;
+export interface ReleaseArtifact {
     url: string;
     sha256: string;
+}
+
+export interface ReleaseManifest {
+    version: string;
+    /** Per-arch artifacts, keyed by our arch names (`x86_64`, `aarch64`). */
+    arches?: Record<string, ReleaseArtifact>;
+    /** Legacy single-arch fields, used when `arches` is absent. */
+    url?: string;
+    sha256?: string;
     /** Host floors; `update` refuses to install a release the host cannot run. */
     min_glibc?: string;
     min_kernel?: string;
     min_python?: string;
+}
+
+/** Release arch key for the running binary (`x64` -> `x86_64`, `arm64` -> `aarch64`). */
+export function hostArch(arch: string = process.arch): string {
+    if (arch === 'x64') return 'x86_64';
+    if (arch === 'arm64') return 'aarch64';
+    return arch;
+}
+
+/**
+ * Pick the download for `arch` from a manifest. Prefers the per-arch `arches`
+ * map; falls back to the legacy top-level `url`/`sha256` for single-arch
+ * manifests. Throws when the manifest has no artifact for this architecture.
+ */
+export function selectArtifact(m: ReleaseManifest, arch: string = hostArch()): ReleaseArtifact {
+    const a = m.arches?.[arch];
+    if (a?.url && a?.sha256) return a;
+    if (m.url && m.sha256) return { url: m.url, sha256: m.sha256 };
+    if (m.arches) throw new Error(`no release artifact for architecture ${arch}`);
+    throw new Error('release manifest has no artifact url/sha256');
 }
 
 /** Compare dotted versions numerically. Returns -1, 0 or 1. */
@@ -141,8 +169,8 @@ export async function runUpdate(args: string[]): Promise<number> {
         console.error(`update: could not fetch release manifest (${manifestUrl}): ${e instanceof Error ? e.message : String(e)}`);
         return 1;
     }
-    if (!manifest.version || !manifest.url || !manifest.sha256) {
-        console.error('update: release manifest is missing version/url/sha256');
+    if (!manifest.version) {
+        console.error('update: release manifest is missing version');
         return 1;
     }
 
@@ -163,15 +191,23 @@ export async function runUpdate(args: string[]): Promise<number> {
         return 1;
     }
 
+    let artifact: ReleaseArtifact;
+    try {
+        artifact = selectArtifact(manifest);
+    } catch (e) {
+        console.error(`update: ${e instanceof Error ? e.message : String(e)}`);
+        return 1;
+    }
+
     const work = path.join(tmpdir(), `phnx-drive-sync-update-${Date.now()}`);
     mkdirSync(work, { recursive: true });
     const tarball = path.join(work, 'release.tar.gz');
     try {
-        console.log(`downloading ${manifest.url}`);
-        await download(manifest.url, tarball);
+        console.log(`downloading ${artifact.url}`);
+        await download(artifact.url, tarball);
         const got = sha256File(tarball);
-        if (got.toLowerCase() !== manifest.sha256.toLowerCase()) {
-            console.error(`update: sha256 mismatch (expected ${manifest.sha256}, got ${got}); aborting`);
+        if (got.toLowerCase() !== artifact.sha256.toLowerCase()) {
+            console.error(`update: sha256 mismatch (expected ${artifact.sha256}, got ${got}); aborting`);
             return 1;
         }
         console.log('sha256 verified; extracting...');

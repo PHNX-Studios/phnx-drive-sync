@@ -120,6 +120,23 @@ echo "build: packing $TARBALL"
 tar -C dist -czf "$TARBALL" "$NAME"
 SHA="$(sha256sum "$TARBALL" | awk '{print $1}')"
 BASE="${RELEASE_BASE_URL:-https://github.com/PHNX-Studios/phnx-drive-sync/releases/download/v$VERSION}"
+
+# Per-arch fragment: the release job merges these into an arch-aware latest.json
+# (see packaging/merge-manifests.mjs).
+cat > "dist/latest-$TARBALL_ARCH.json" <<EOF
+{
+  "version": "$VERSION",
+  "arch": "$TARBALL_ARCH",
+  "url": "$BASE/$NAME.tar.gz",
+  "sha256": "$SHA",
+  "min_glibc": "2.17",
+  "min_kernel": "3.10",
+  "min_python": "3.8"
+}
+EOF
+
+# Single-arch manifest (legacy shape) for local/dev use; the published release
+# uses the merged, arch-aware latest.json.
 cat > dist/latest.json <<EOF
 {
   "version": "$VERSION",
@@ -134,4 +151,5 @@ EOF
 echo "build: done"
 echo "  $TARBALL"
 echo "  dist/latest.json"
+echo "  dist/latest-$TARBALL_ARCH.json"
 echo "  sha256: $SHA"
