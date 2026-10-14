@@ -82,6 +82,7 @@ mkdir -p \
 
 cp -a python "$STAGE/"
 cp -a tray "$STAGE/"
+cp -a gui "$STAGE/"
 cp -a assets "$STAGE/"
 
 cp -a packaging/systemd/user/phnx-drive-sync.service \
@@ -91,9 +92,11 @@ cp -a packaging/systemd/user/phnx-drive-sync.service \
       "$STAGE/share/systemd/user/"
 
 cp -a packaging/desktop/phnx-drive-sync-restart.desktop.in "$STAGE/share/"
+cp -a packaging/desktop/phnx-drive-sync-gui.desktop.in "$STAGE/share/"
 cp -a packaging/desktop/phnx-drive-sync-tray.desktop.in "$STAGE/share/autostart/"
 
 cp -a packaging/bin/phnx-drive-sync-tray "$STAGE/share/bin/"
+cp -a packaging/bin/phnx-drive-sync-gui "$STAGE/share/bin/"
 cp -a "tray/nautilus-scripts/Proton Drive/." "$STAGE/share/nautilus-scripts/Proton Drive/"
 
 cp -a packaging/install.sh "$STAGE/install.sh"

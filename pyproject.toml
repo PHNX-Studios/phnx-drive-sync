@@ -1,0 +1,16 @@
+# Python tooling configuration for the GUI (gui/) and its tests.
+# The application itself is dependency-free beyond PyGObject (system).
+
+[tool.ruff]
+line-length = 140
+target-version = "py38"
+
+[tool.ruff.lint]
+# pycodestyle errors + pyflakes; formatting-only rules stay out of the way.
+select = ["E4", "E7", "E9", "F", "W"]
+ignore = ["E501", "W291", "W293"]
+
+[tool.ruff.lint.per-file-ignores]
+# These deliberately import after a sys.path insertion (dev + installed layouts).
+"test/**" = ["E402"]
+"gui/phnx-drive-sync-gui.py" = ["E402"]

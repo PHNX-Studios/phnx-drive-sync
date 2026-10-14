@@ -9,19 +9,27 @@ export const CLIENT_UID_PREFIX = 'syncengine';
 const stateHome = process.env.DRIVE_SYNC_HOME;
 const dataHome = process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share');
 const stateBase = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
-export const shareDir = stateHome ? path.join(stateHome, 'share') : path.join(dataHome, 'drive-sync');
+/** Per-app data/state directory; matches the app, lib, config and unit names. */
+const APP_DIR = 'phnx-drive-sync';
+/** Pre-rename directory name, migrated once by the engine (see index.ts ensureLayout). */
+const LEGACY_APP_DIR = 'drive-sync';
+export const shareDir = stateHome ? path.join(stateHome, 'share') : path.join(dataHome, APP_DIR);
 /** Mount point the user sees (Phase 2: served by the FUSE sidecar). */
 export const localRoot = path.resolve(process.env.DRIVE_SYNC_ROOT || path.join(homedir(), 'Proton Drive'));
 /** Real on-disk tree: what scan/watcher/execute/filters operate on. */
 export const treeRoot = path.resolve(process.env.DRIVE_SYNC_TREE || path.join(shareDir, 'tree'));
 export const remoteRootPath = (process.env.DRIVE_SYNC_REMOTE || '').replace(/^\/+|\/+$/g, '');
 
-export const stateDir = stateHome ? path.join(stateHome, 'state') : path.join(stateBase, 'drive-sync');
+export const stateDir = stateHome ? path.join(stateHome, 'state') : path.join(stateBase, APP_DIR);
 export const stateDbPath = path.join(shareDir, 'state.db');
 export const statusFile = path.join(stateDir, 'status.json');
-export const logFile = path.join(stateDir, 'drive-sync.log');
+export const logFile = path.join(stateDir, 'phnx-drive-sync.log');
 export const lockFile = path.join(stateDir, 'daemon.lock');
 export const rpcSocket = path.join(stateDir, 'rpc.sock');
+
+/** Old state/data dirs, migrated once into the phnx-drive-sync layout; null under DRIVE_SYNC_HOME. */
+export const legacyShareDir = stateHome ? null : path.join(dataHome, LEGACY_APP_DIR);
+export const legacyStateDir = stateHome ? null : path.join(stateBase, LEGACY_APP_DIR);
 
 export const filtersFile = path.join(treeRoot, '.protonignore');
 export const partialSuffix = '.drivesync.part';
@@ -70,7 +78,7 @@ export function newFilesMode(): 'local' | 'online' {
 export function evictFreeGb(): number {
     return Math.max(0, Number(process.env.DRIVE_SYNC_EVICT_FREE_GB || 0));
 }
-/** Sidecar default for recall-on-hover/prefetch; `drive-sync.sh prefetch on|off` overrides via state.db meta. */
+/** Sidecar default for recall-on-hover/prefetch; `phnx-drive-sync.sh prefetch on|off` overrides via state.db meta. */
 export function prefetchDefault(): boolean {
     return /^(1|on|true|yes)$/i.test((process.env.DRIVE_SYNC_PREFETCH ?? '').trim());
 }

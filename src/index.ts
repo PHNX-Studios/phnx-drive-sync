@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
 import { appRoot } from './approot';
-import { lockFile, localRoot, prefetchDefault, shareDir, shutdownGraceMs, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
+import { legacyShareDir, legacyStateDir, lockFile, localRoot, prefetchDefault, shareDir, shutdownGraceMs, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
 import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
@@ -14,6 +14,7 @@ import { rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc'
 import { waitForPassEnd } from './shutdown';
 import * as st from './state';
 import { fileEq, requestStop, runPass, steady } from './sync';
+import { absOf, baseName, listDirStatus } from './tree';
 import { runUpdate } from './update';
 import { VERSION } from './version';
 import { startWatcher } from './watcher';
@@ -146,8 +147,9 @@ async function main(): Promise<void> {
     process.exit(process.exitCode ?? 0);
 }
 
-/** Directories the daemon needs; relocates the legacy layout (real tree at localRoot) once. */
+/** Directories the daemon needs; migrates the pre-rename layout once, then the legacy tree. */
 function ensureLayout(): void {
+    migrateLegacyLayout();
     mkdirSync(stateDir, { recursive: true });
     mkdirSync(shareDir, { recursive: true });
     if (!existsSync(treeRoot)) {
@@ -166,18 +168,67 @@ function ensureLayout(): void {
     mkdirSync(localRoot, { recursive: true });
 }
 
-function absOf(p: string): string {
-    return p === '' ? treeRoot : `${treeRoot}/${p}`;
+function fixLegacyLogName(dir: string): void {
+    const oldLog = path.join(dir, 'drive-sync.log');
+    const newLog = path.join(dir, 'phnx-drive-sync.log');
+    try {
+        if (existsSync(oldLog) && !existsSync(newLog)) renameSync(oldLog, newLog);
+    } catch {
+        /* best effort: a stale log name is harmless */
+    }
+}
+
+/** Move `oldDir`'s entries into a pre-existing `newDir`, recursing into shared subdirs. */
+function mergeDir(oldDir: string, newDir: string): void {
+    mkdirSync(newDir, { recursive: true });
+    for (const entry of readdirSync(oldDir)) {
+        const from = path.join(oldDir, entry);
+        const to = path.join(newDir, entry);
+        if (!existsSync(to)) {
+            renameSync(from, to);
+        } else if (statSync(from).isDirectory() && statSync(to).isDirectory()) {
+            mergeDir(from, to); // e.g. an empty new dir next to a populated legacy one
+        }
+    }
+    try {
+        rmdirSync(oldDir); // only removes it if now empty; leftovers stay in place
+    } catch {
+        /* not empty or in use */
+    }
+}
+
+/**
+ * One-time rename of the pre-rename layout: {share,state}/drive-sync ->
+ * {share,state}/phnx-drive-sync. All sync state (baseline db, placeholder and
+ * keep marks, the real tree, the SDK cache) moves with it, so an upgrade never
+ * re-downloads or re-adopts anything. When the new dir already exists (e.g.
+ * created empty at import), its contents are merged in and any leftovers are
+ * left in place rather than deleted.
+ */
+function migrateLegacyLayout(): void {
+    const pairs: Array<[string | null, string]> = [
+        [legacyShareDir, shareDir],
+        [legacyStateDir, stateDir],
+    ];
+    for (const [oldDir, newDir] of pairs) {
+        if (!oldDir || oldDir === newDir || !existsSync(oldDir)) continue;
+        try {
+            if (!existsSync(newDir)) {
+                renameSync(oldDir, newDir); // same filesystem: one atomic rename
+            } else {
+                mergeDir(oldDir, newDir);
+            }
+            if (newDir === stateDir) fixLegacyLogName(newDir);
+            log('INFO', `migrated legacy layout ${oldDir} -> ${newDir}`);
+        } catch (e) {
+            log('WARN', `legacy layout migration failed (${oldDir} -> ${newDir}); continuing`, e);
+        }
+    }
 }
 
 function parentRel(p: string): string {
     const i = p.lastIndexOf('/');
     return i === -1 ? '' : p.slice(0, i);
-}
-
-function baseName(p: string): string {
-    const i = p.lastIndexOf('/');
-    return i === -1 ? p : p.slice(i + 1);
 }
 
 const hydrating = new Map<string, Promise<void>>();
@@ -633,6 +684,12 @@ async function daemon(): Promise<void> {
             await trashPlaceholder(p);
             afterRpc();
             return [{ path: p, ok: true, note: 'trashed' }];
+        },
+        list: async (paths) => listDirStatus(paths[0]),
+        sync: async () => {
+            // the GUI "Sync now": same as SIGUSR1, but without assuming systemd
+            schedule(0);
+            return [{ path: 'sync', ok: true, note: 'scheduled' }];
         },
     });
     rpcStarted = true;

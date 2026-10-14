@@ -35,6 +35,32 @@ jobs:
       - name: Unit tests
         run: bun test test/
 
+  gui:
+    name: GUI (byte-compile, unit tests, headless smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The system python is used deliberately: PyGObject (gi) ships as distro
+      # packages and is not pip-installable, so setup-python would hide it.
+      - name: Install GTK4, Libadwaita and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0 xvfb
+
+      - name: Byte-compile the GUI and tray
+        run: python3 -m compileall -q gui tray test/gui test/tray
+
+      - name: GUI unit tests
+        run: python3 -m unittest discover -s test/gui -p 'test_*.py' -v
+
+      - name: Tray menu structure tests
+        run: python3 -m unittest discover -s test/tray -p 'test_*.py' -v
+
+      - name: Headless smoke (build the window and exit)
+        run: xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check
+
   build:
     name: Build release tarball (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
