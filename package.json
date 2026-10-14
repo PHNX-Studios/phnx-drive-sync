@@ -16,6 +16,7 @@
         "bun": ">=1.4.2"
     },
     "scripts": {
+        "deps": "(cd vendor/cli && bun install --frozen-lockfile) && (cd vendor/client/js && bun install --frozen-lockfile) && (cd vendor/incubating/account/js && bun install --frozen-lockfile)",
         "build": "bash packaging/build.sh",
         "typecheck": "./node_modules/.bin/tsc -p tsconfig.json",
         "test": "bun test test/"

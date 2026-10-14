@@ -323,7 +323,7 @@ interval — re-login with the official CLI:
 ## Development
 
 ```sh
-cd vendor/cli && bun install        # bootstrap deps (node_modules is a symlink into vendor)
+bun run deps                        # install vendored dependency trees (cli + SDK + account SDK)
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
 bun test test/                      # classify/placeholder/evict unit tests (temp state)
 ./phnx-drive-sync.sh once --dry-run      # classify without changing anything

@@ -38,11 +38,15 @@ TARBALL="dist/$NAME.tar.gz"
 
 echo "build: $NAME (bun target bun-linux-$TARGET)"
 
-# Runtime deps must be installed once (node_modules is a symlink farm in dev).
-if [ ! -d vendor/cli/node_modules ]; then
-    echo "build: installing vendor/cli dependencies"
-    ( cd vendor/cli && "$BUN" install --frozen-lockfile )
-fi
+# The vendored packages are not bun workspaces, so each dependency tree is
+# installed on its own. This matters for the SDK's own deps (e.g. @boltffi/runtime
+# resolves from vendor/client/js/node_modules, not vendor/cli's).
+for depdir in vendor/cli vendor/client/js vendor/incubating/account/js; do
+    if [ ! -d "$depdir/node_modules" ]; then
+        echo "build: installing $depdir dependencies"
+        ( cd "$depdir" && "$BUN" install --frozen-lockfile )
+    fi
+done
 
 rm -rf dist
 mkdir -p "$STAGE"

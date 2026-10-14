@@ -20,8 +20,8 @@ runtime by the packaged installer.
 git clone https://github.com/PHNX-Studios/phnx-drive-sync.git
 cd phnx-drive-sync
 
-# runtime dependencies live in vendor/cli (node_modules is a symlink into vendor)
-cd vendor/cli && bun install && cd ../..
+# install the vendored dependency trees (cli + SDK + account SDK)
+bun run deps
 
 # type-check (strict, noEmit)
 ./node_modules/.bin/tsc -p tsconfig.json

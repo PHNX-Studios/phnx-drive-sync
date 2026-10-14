@@ -20,10 +20,13 @@ jobs:
         with:
           bun-version: "1.4.2"
 
-      # Runtime dependencies live in vendor/cli; the repo-root node_modules is a
-      # committed symlink into it, which is what the documented dev commands use.
+      # Each vendored package installs its own tree; the repo-root node_modules
+      # is a committed symlink into vendor/cli, which the dev commands rely on.
       - name: Install vendored dependencies
-        run: cd vendor/cli && bun install --frozen-lockfile
+        run: |
+          for d in vendor/cli vendor/client/js vendor/incubating/account/js; do
+            ( cd "$d" && bun install --frozen-lockfile )
+          done
 
       - name: Type-check (strict)
         run: ./node_modules/.bin/tsc -p tsconfig.json
