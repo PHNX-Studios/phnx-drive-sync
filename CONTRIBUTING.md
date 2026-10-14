@@ -10,6 +10,8 @@ unofficial project and is not affiliated with Proton AG.
 - Never commit secrets, session tokens, personal paths, or a real `state.db`.
 - Do not weaken the sync safety invariants. The behavior is documented in the
   README under "Conflict policy" and "Files on demand".
+- `main` is protected: changes land through a pull request and the CI check
+  (`Type-check and unit tests`) must pass; force-pushes are rejected.
 
 ## Development setup
 
@@ -26,7 +28,7 @@ bun run deps
 # type-check (strict, noEmit)
 ./node_modules/.bin/tsc -p tsconfig.json
 
-# unit tests (scoped: a bare `bun test` walks the ~930 vendored SDK tests)
+# unit tests (scoped: a bare `bun test` also walks the vendored SDK tests)
 bun test test/
 
 # classify only, change nothing

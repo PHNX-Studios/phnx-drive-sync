@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a problem with PHNX Drive Sync
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not paste credentials, session tokens,
+        or the contents of `state.db`.
+  - type: input
+    id: version
+    attributes:
+      label: PHNX Drive Sync version
+      description: Output of `phnx-drive-sync version`
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How was it installed?
+      options:
+        - release tarball (install.sh)
+        - built from source
+        - other
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Distribution and kernel
+      description: e.g. Ubuntu 24.04, and the output of `uname -r`
+    validations:
+      required: true
+  - type: dropdown
+    id: fod
+    attributes:
+      label: Files-on-demand (FUSE) active?
+      options:
+        - "yes"
+        - "no"
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "`journalctl --user -u phnx-drive-sync.service -n 100` (redact anything personal)"
+    validations:
+      required: false

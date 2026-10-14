@@ -26,6 +26,13 @@ The SDK is vendored because the runtime resolves its TypeScript sources directly
 (see `tsconfig.json` `paths`), and the release build embeds the SDK (including
 its WebAssembly crypto module) into the compiled engine and login CLI binaries.
 
+`vendor/` is a **curated subset** of the upstream repository, not the whole SDK:
+it contains only the JavaScript/TypeScript sources the build needs -
+`vendor/cli` (the login CLI), `vendor/client/js` (the Drive SDK),
+`vendor/incubating/account/js` (the account module) and `vendor/config/js` -
+together with the upstream `README.md`, `LICENSE.md` and `SECURITY.md`. The
+upstream C#, Kotlin and Swift trees are not vendored.
+
 ### Proton hosted-service terms are separate from the code license
 
 The MIT license covers use of the SDK source code only. Access to Proton's

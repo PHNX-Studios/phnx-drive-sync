@@ -293,6 +293,11 @@ tests), `DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `DRIVE_SYNC_NEW_FILES` (`local`|`onli
 `DRIVE_SYNC_SHUTDOWN_GRACE_MS` (how long shutdown waits for the in-flight file
 operation to finish, default 120000; keep the unit's `TimeoutStopSec` above it).
 
+Beyond these, the systemd unit's env file (`~/.config/phnx-drive-sync/env`)
+carries the SDK's `PROTON_DRIVE_CACHE_DIR` and `PROTON_DRIVE_LOG_LEVEL`, and
+`DRIVE_SYNC_LIBDIR` is an internal override for where the shipped resources
+(`python/`, `assets/`, `tray/`) are found (used by the installer and tests).
+
 **Shutdown.** On `SIGTERM`/`SIGINT` the engine stops scheduling passes, asks the
 running pass to stop, and then **finishes the file operation already in flight**
 before unmounting and exiting (the pass stops at the next action boundary, so no
@@ -332,8 +337,11 @@ bash packaging/build.sh             # build the portable release tarball into di
 
 `packaging/build.sh` compiles `src/index.ts` and the login CLI into
 self-contained binaries (Bun runtime + all modules embedded, glibc 2.17+),
-assembles the runtime resources, and emits `dist/phnx-drive-sync-<version>-linux-<arch>.tar.gz`
-plus `dist/latest.json` (the manifest `phnx-drive-sync update` consumes).
+assembles the runtime resources, and emits
+`dist/phnx-drive-sync-<version>-linux-<arch>.tar.gz`, a per-architecture manifest
+fragment `dist/latest-<arch>.json`, and a legacy single-arch `dist/latest.json`.
+The release workflow merges the fragments into the arch-aware `latest.json` that
+`phnx-drive-sync update` consumes (`packaging/merge-manifests.mjs`).
 The release version comes from the root `package.json`.
 
 ## Known caveats
@@ -353,6 +361,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
 development setup and pull-request checklist, and
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. For
 security issues, follow [SECURITY.md](SECURITY.md) and report privately.
+Released changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
