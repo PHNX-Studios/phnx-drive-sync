@@ -4,6 +4,10 @@ Proton Drive Sync (`proton-drive-sync`) is an independent, unofficial project
 released under the MIT License (see [LICENSE](./LICENSE)). It is **not
 affiliated with, endorsed by, or supported by Proton AG**.
 
+Proton Drive Sync is a personal, non-commercial open-source project published by
+PHNX Studios. It relies on the Proton Drive SDK's allowance for personal,
+non-commercial projects and is not offered for commercial or production use.
+
 The project redistributes and/or links against the following third-party
 components. Their licenses apply to those components; the notices below are
 provided to satisfy their attribution terms.
@@ -48,8 +52,13 @@ The single-file binaries produced by `packaging/build.sh` embed the Bun runtime.
 The compiled binaries embed the npm dependencies of `vendor/cli` (and the
 vendored SDK), including but not limited to `@boltffi/runtime`, `@noble/hashes`,
 `comlink`, `ttag`, and their transitive dependencies. Each package retains its
-own license; the license texts are present inside
-`vendor/cli/node_modules/<package>/` in the source distribution.
+own license.
+
+The full license identifier and, where available, the license text of every
+package in the vendored dependency tree is generated at build time into
+[`THIRD_PARTY_LICENSES.txt`](./THIRD_PARTY_LICENSES.txt) and shipped in the
+release tarball (and installed alongside this file). That generated file is the
+authoritative list for a given release.
 
 The Python sidecar dependencies (`pyfuse3`, `trio`, `cffi`) are **not**
 redistributed with this project: `install.sh` installs them from the host
@@ -58,12 +67,14 @@ licenses are handled by their respective upstreams.
 
 ## Generating a full dependency list
 
-To enumerate the exact embedded packages and their declared licenses for a given
-release, inspect the vendored dependency tree:
+[`THIRD_PARTY_LICENSES.txt`](./THIRD_PARTY_LICENSES.txt) is produced by
+`packaging/collect-licenses.mjs`, which `packaging/build.sh` runs automatically.
+To regenerate it by hand:
 
 ```sh
-cd vendor/cli
-./node_modules/.bin/license-checker --summary   # or: bun pm ls
+cd vendor/cli && bun install --frozen-lockfile && cd ../..
+bun packaging/collect-licenses.mjs THIRD_PARTY_LICENSES.txt vendor/cli/node_modules
 ```
 
-This file should be updated whenever `vendor/` is refreshed to a new SDK release.
+This file should be regenerated whenever `vendor/` is refreshed to a new SDK
+release.

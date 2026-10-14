@@ -33,9 +33,13 @@ jobs:
         run: bun test test/
 
   build:
-    name: Build release tarball
-    runs-on: ubuntu-latest
+    name: Build release tarball (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ ubuntu-24.04, ubuntu-24.04-arm ]
     steps:
       - uses: actions/checkout@v4
 

@@ -357,13 +357,15 @@ security issues, follow [SECURITY.md](SECURITY.md) and report privately.
 ## License
 
 This project is licensed under the MIT License. Copyright (c) 2026 PHNX Studios.
-See [LICENSE](LICENSE).
+See [LICENSE](LICENSE). It is a personal, non-commercial open-source project
+published by PHNX Studios.
 
 It bundles the official Proton Drive SDK (developed by Proton AG, MIT) and the
 Bun runtime, and embeds the JavaScript dependencies of both into the compiled
-binaries. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full
-attribution and for the operational rules that apply to third-party clients of
-Proton's hosted services.
+binaries. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the summary
+and the operational rules that apply to third-party clients of Proton's hosted
+services; the generated `THIRD_PARTY_LICENSES.txt` (shipped in each release)
+lists every embedded package with its license text.
 
 Proton Drive Sync is an independent, unofficial application and is not
 affiliated with or supported by Proton AG.

@@ -1,0 +1,11 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  # The Proton Drive SDK under vendor/ is vendored deliberately (the runtime
+  # resolves its sources via tsconfig paths) and is refreshed manually to a
+  # reviewed upstream revision, so it is intentionally not tracked here.

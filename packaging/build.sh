@@ -96,6 +96,13 @@ cp -a packaging/install.sh "$STAGE/install.sh"
 cp -a README.md "$STAGE/README.md"
 # license + third-party attributions must travel with every distributed copy
 cp -a LICENSE THIRD_PARTY_NOTICES.md "$STAGE/"
+
+# full license texts for every package embedded in the compiled binaries
+if "$BUN" packaging/collect-licenses.mjs "$STAGE/THIRD_PARTY_LICENSES.txt" vendor/cli/node_modules; then
+    :
+else
+    echo "build: WARNING: could not collect embedded dependency licenses" >&2
+fi
 chmod +x "$STAGE/install.sh" "$STAGE/proton-drive-sync-engine"
 [ -x "$STAGE/proton-drive" ] && chmod +x "$STAGE/proton-drive"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"

@@ -428,6 +428,7 @@ cp -a "$SELF_DIR/assets" "$LIB/"
 cp -a "$SELF_DIR/README.md" "$LIB/README.md" 2>/dev/null || true
 cp -a "$SELF_DIR/LICENSE" "$LIB/LICENSE"
 cp -a "$SELF_DIR/THIRD_PARTY_NOTICES.md" "$LIB/THIRD_PARTY_NOTICES.md"
+cp -a "$SELF_DIR/THIRD_PARTY_LICENSES.txt" "$LIB/THIRD_PARTY_LICENSES.txt" 2>/dev/null || true
 printf '%s\n' "$NEW_VERSION" > "$LIB/VERSION"
 
 install -m 0755 "$SELF_DIR/proton-drive-sync-engine" "$LIB/proton-drive-sync-engine"
