@@ -41,9 +41,18 @@ for (const file of inputs) {
         process.exit(1);
     }
     seenVersion = m.version;
+    if (arches[m.arch]) {
+        console.error(`merge-manifests: duplicate architecture ${m.arch} (${file})`);
+        process.exit(1);
+    }
     arches[m.arch] = { url: m.url, sha256: m.sha256 };
     for (const k of ['min_glibc', 'min_kernel', 'min_python']) {
-        if (m[k] && !meta[k]) meta[k] = m[k];
+        if (!m[k]) continue;
+        if (meta[k] && meta[k] !== m[k]) {
+            console.error(`merge-manifests: conflicting ${k} (${meta[k]} vs ${m[k]} in ${file})`);
+            process.exit(1);
+        }
+        meta[k] = m[k];
     }
 }
 

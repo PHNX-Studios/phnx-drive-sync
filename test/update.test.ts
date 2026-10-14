@@ -50,6 +50,16 @@ describe('selectArtifact', () => {
         expect(selectArtifact(legacy, 'aarch64')).toEqual({ url: 'https://x/only.tar.gz', sha256: 'cc' });
     });
 
+    test('never uses a legacy url when an arches map is present but lacks the host arch', () => {
+        const mixed = {
+            version: '0.2.0',
+            arches: { x86_64: { url: 'https://x/x86_64.tar.gz', sha256: 'aa' } },
+            url: 'https://x/legacy.tar.gz',
+            sha256: 'cc',
+        } as ReleaseManifest;
+        expect(() => selectArtifact(mixed, 'aarch64')).toThrow(/architecture aarch64/);
+    });
+
     test('throws when neither arches nor legacy fields are usable', () => {
         expect(() => selectArtifact({ version: '0.2.0' } as ReleaseManifest, 'x86_64')).toThrow(/no artifact/);
         expect(() =>

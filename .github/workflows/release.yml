@@ -3,10 +3,9 @@ name: Release
 on:
   push:
     tags: [ 'v*' ]
-  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -23,12 +22,7 @@ jobs:
         with:
           bun-version: "1.4.2"
 
-      - name: Install vendored dependencies
-        run: |
-          for d in vendor/cli vendor/client/js vendor/incubating/account/js; do
-            ( cd "$d" && bun install --frozen-lockfile )
-          done
-
+      # build.sh installs the vendored dependency trees itself when missing.
       - name: Build portable tarball
         run: bash packaging/build.sh
 
@@ -45,6 +39,8 @@ jobs:
     name: Publish release
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
 
@@ -62,11 +58,16 @@ jobs:
       - name: Merge per-arch manifests
         run: bun packaging/merge-manifests.mjs latest.json dist/latest-*.json
 
-      - name: Create GitHub release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            dist/*.tar.gz latest.json
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # re-run after a partial failure: update the existing release's assets
+            gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz latest.json --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              dist/*.tar.gz latest.json
+          fi

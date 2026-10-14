@@ -404,16 +404,26 @@ fi
 log "Installing $APP $NEW_VERSION -> $LIB"
 mkdir -p "$BIN" "$CONFIG_DIR" "$UNIT_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DIR" "$NAUTILUS_DIR"
 
+# escape a path for use as a POSIX ERE (pkill -f treats the pattern as one)
+re_escape() { printf '%s' "$1" | sed 's/[][\\{}.^$*+?()|]/\\&/g'; }
+
 # stop the units before swapping the runtime: a restarted engine must never see
 # a half-copied libdir (its mount monitor could relaunch the sidecar mid-copy)
 if [ "$SYSTEMD_USER" -eq 1 ]; then
     systemctl --user stop phnx-drive-sync-tray.service phnx-drive-sync.service 2>/dev/null || true
+    # also retire a pre-rename (proton-drive-sync) install so its daemon cannot
+    # keep running alongside the new one after the upgrade
+    systemctl --user stop proton-drive-sync-tray.service proton-drive-sync.service \
+        proton-drive-sync-update.timer proton-drive-sync-update.service 2>/dev/null || true
+    systemctl --user disable proton-drive-sync.service proton-drive-sync-tray.service \
+        proton-drive-sync-update.timer 2>/dev/null || true
     # a tray launched via XDG autostart lives outside the unit's cgroup; stop it
     # too, or it keeps the single-instance lock and the freshly installed tray
-    # exits. Match the exact installed script path (not a loose name) so an
-    # unrelated shell whose arguments happen to contain the name is never hit.
+    # exits. Match the exact installed script path (escaped, not a loose name)
+    # so an unrelated shell whose arguments contain the name is never hit.
     if command -v pkill >/dev/null 2>&1; then
-        pkill -f "$HOME/.local/lib/phnx-drive-sync/tray/phnx-drive-sync-tray.py" 2>/dev/null || true
+        pkill -f "$(re_escape "$HOME/.local/lib/phnx-drive-sync/tray/phnx-drive-sync-tray.py")" 2>/dev/null || true
+        pkill -f "$(re_escape "$HOME/.local/lib/proton-drive-sync/tray/proton-drive-sync-tray.py")" 2>/dev/null || true
     fi
 fi
 
@@ -468,7 +478,18 @@ install -m 0644 "$SELF_DIR/assets/phnx-drive-sync.svg" "$ICON_DIR/phnx-drive-syn
 install -m 0755 "$SELF_DIR/share/nautilus-scripts/Proton Drive/Free up Space" "$NAUTILUS_DIR/"
 install -m 0755 "$SELF_DIR/share/nautilus-scripts/Proton Drive/Keep on This Device" "$NAUTILUS_DIR/"
 
-# remove artifacts from the pre-rename layout
+# remove artifacts from the immediate pre-rename (proton-drive-sync) layout so an
+# upgrade never leaves a duplicate launcher, unit, autostart entry or icon behind
+rm -f "$BIN/proton-drive-sync" "$BIN/proton-drive-sync-tray" \
+    "$AUTOSTART_DIR/proton-drive-sync-tray.desktop" \
+    "$APPS_DIR/proton-drive-sync-restart.desktop" \
+    "$HOME/Desktop/proton-drive-sync-restart.desktop" \
+    "$ICON_DIR/proton-drive-sync.svg" \
+    "$UNIT_DIR/proton-drive-sync.service" "$UNIT_DIR/proton-drive-sync-tray.service" \
+    "$UNIT_DIR/proton-drive-sync-update.service" "$UNIT_DIR/proton-drive-sync-update.timer" 2>/dev/null || true
+rm -rf "$HOME/.local/lib/proton-drive-sync"
+
+# remove artifacts from the older drive-sync layout
 rm -f "$BIN/drive-sync" "$BIN/drive-sync-tray" "$BIN/drive-sync-tray-wait" \
     "$AUTOSTART_DIR/drive-sync-tray.desktop" \
     "$APPS_DIR/drive-sync-restart.desktop" \

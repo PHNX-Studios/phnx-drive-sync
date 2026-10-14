@@ -52,10 +52,14 @@ export function hostArch(arch: string = process.arch): string {
  * manifests. Throws when the manifest has no artifact for this architecture.
  */
 export function selectArtifact(m: ReleaseManifest, arch: string = hostArch()): ReleaseArtifact {
-    const a = m.arches?.[arch];
-    if (a?.url && a?.sha256) return a;
+    if (m.arches) {
+        const a = m.arches[arch];
+        if (a?.url && a?.sha256) return a;
+        // Never fall back to a legacy single-arch url here: it may be a
+        // different architecture, which would install the wrong binary.
+        throw new Error(`no release artifact for architecture ${arch}`);
+    }
     if (m.url && m.sha256) return { url: m.url, sha256: m.sha256 };
-    if (m.arches) throw new Error(`no release artifact for architecture ${arch}`);
     throw new Error('release manifest has no artifact url/sha256');
 }
 

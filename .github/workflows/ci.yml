@@ -56,8 +56,8 @@ jobs:
       - name: Upload release artifact
         uses: actions/upload-artifact@v7
         with:
-          name: phnx-drive-sync-tarball
+          name: phnx-drive-sync-tarball-${{ matrix.runner }}
           path: |
             dist/*.tar.gz
-            dist/latest.json
+            dist/latest-*.json
           if-no-files-found: error
