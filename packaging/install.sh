@@ -272,7 +272,12 @@ user_install_inotifytools() {
 
 user_have_appindicator() {
     command -v python3 >/dev/null 2>&1 || return 1
-    GI_TYPELIB_PATH="$HOME/.local/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}" \
+    # Probe under a clean environment: a snap/IDE parent shell can export a
+    # polluted GSETTINGS_SCHEMA_DIR / XDG_DATA_DIRS that makes GTK abort while
+    # loading settings, which would otherwise look like "the typelib is missing".
+    # The probe only needs python3 + GI, so `env -i` is safe here.
+    env -i PATH="/usr/bin:/bin" HOME="$HOME" \
+        GI_TYPELIB_PATH="$HOME/.local/lib/girepository-1.0" \
         python3 -c 'import gi
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -280,6 +285,16 @@ try:
 except Exception:
     gi.require_version("AppIndicator3", "0.1")
     from gi.repository import AppIndicator3' >/dev/null 2>&1
+}
+
+user_copy_appind_libs() {
+    # Copy the implementation libraries only when the system lacks them, so a
+    # user-level copy never shadows a system lib through LD_LIBRARY_PATH.
+    local root="$1" soname
+    for soname in libayatana-appindicator3.so.1 libappindicator3.so.1; do
+        if ldconfig -p 2>/dev/null | grep -q "$soname"; then continue; fi
+        find "$root" -name "${soname%.so.1}*" -exec cp -a {} "$HOME/.local/lib/" \; 2>/dev/null || true
+    done
 }
 
 user_install_appindicator() {
@@ -294,8 +309,7 @@ user_install_appindicator() {
             file="$(find "$dir" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -print -quit 2>/dev/null)"
             if [ -n "$file" ] && user_extract_pkg "$file" "$dir/x"; then
                 find "$dir/x" -name '*.typelib' -exec cp -a {} "$HOME/.local/lib/girepository-1.0/" \; 2>/dev/null || true
-                find "$dir/x" -name 'libayatana-appindicator3.so*' -exec cp -a {} "$HOME/.local/lib/" \; 2>/dev/null || true
-                find "$dir/x" -name 'libappindicator3.so*' -exec cp -a {} "$HOME/.local/lib/" \; 2>/dev/null || true
+                user_copy_appind_libs "$dir/x"
                 got=1
             fi
         fi
@@ -349,11 +363,13 @@ mkdir -p "$BIN" "$CONFIG_DIR" "$UNIT_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DI
 # a half-copied libdir (its mount monitor could relaunch the sidecar mid-copy)
 if [ "$SYSTEMD_USER" -eq 1 ]; then
     systemctl --user stop proton-drive-sync-tray.service proton-drive-sync.service 2>/dev/null || true
-fi
-# a tray launched via XDG autostart lives outside the unit's cgroup; stop it too,
-# or it keeps the single-instance lock and the freshly installed tray exits
-if command -v pkill >/dev/null 2>&1; then
-    pkill -f 'proton-drive-sync-tray.py' 2>/dev/null || true
+    # a tray launched via XDG autostart lives outside the unit's cgroup; stop it
+    # too, or it keeps the single-instance lock and the freshly installed tray
+    # exits. Match the exact installed script path (not a loose name) so an
+    # unrelated shell whose arguments happen to contain the name is never hit.
+    if command -v pkill >/dev/null 2>&1; then
+        pkill -f "$HOME/.local/lib/proton-drive-sync/tray/proton-drive-sync-tray.py" 2>/dev/null || true
+    fi
 fi
 
 # app code only; user state lives under ~/.local/{share,state}/drive-sync and is never touched
