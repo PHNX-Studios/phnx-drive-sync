@@ -19,6 +19,24 @@ command -v bun >/dev/null || [ -x "$HOME/.bun/bin/bun" ] || {
     exit 1
 }
 
+# File watcher (inotify-tools). The engine still runs without it, but local
+# changes then sync only via the low-frequency safety poll, so probe it for real:
+# a loader failure (e.g. a user-local inotifywait missing libinotifytools.so.0)
+# exits 127, a healthy binary that merely times out exits 2.
+watcher_ok=1
+if command -v inotifywait >/dev/null 2>&1; then
+    rc=0
+    timeout 5 inotifywait -q -e create -t 1 "${HOME:-/tmp}" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ]; then watcher_ok=0; fi
+fi
+if [ "$watcher_ok" -ne 0 ]; then
+    echo "install.sh: WARNING: inotifywait (inotify-tools) is missing or not runnable." >&2
+    echo "            Local changes will still sync, but only via a slow safety poll." >&2
+    echo "            Install it:  Debian/Ubuntu: sudo apt install inotify-tools" >&2
+    echo "                          Fedora/RHEL:   sudo dnf install inotify-tools" >&2
+    echo "                          Arch:          sudo pacman -S inotify-tools" >&2
+fi
+
 mkdir -p "$LIB" "$BIN" "$UNIT_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DIR"
 
 echo "install: runtime -> $LIB"

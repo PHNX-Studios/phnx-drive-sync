@@ -11,8 +11,10 @@ Type=simple
 ExecStart=%h/.local/lib/proton-drive-sync/proton-drive-sync.sh run
 # belt & braces: never leave a FUSE session mounted if the engine dies hard
 ExecStopPost=-/usr/bin/fusermount3 -u "%h/Proton Drive"
-# no periodic full walk: one full walk runs at startup, then the inotify watcher
-# and the SDK event stream drive incremental passes (Sync now on demand via SIGUSR1)
+# one full remote walk runs at startup; afterwards the inotify watcher and the
+# SDK event stream drive incremental passes (Sync now on demand via SIGUSR1).
+# If the watcher is unavailable the engine falls back to a low-frequency safety
+# poll, so the unit deliberately does not gate on inotifywait being installed.
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=15

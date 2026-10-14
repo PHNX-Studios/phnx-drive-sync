@@ -1,7 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
-import { lockFile, localRoot, prefetchDefault, shareDir, stateDir, statusFile, treeRoot } from './config';
+import { lockFile, localRoot, prefetchDefault, shareDir, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
 import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
@@ -387,15 +387,28 @@ async function daemon(): Promise<void> {
     let passing = false;
     let pending = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let timerArmedAt = 0;
     let lastPassStartedAt = 0;
 
-    const schedule = (delayMs: number): void => {
+    /**
+     * Debounce a sync pass. Non-sliding callers coalesce (the first event wins);
+     * watcher wakes slide, so the pass runs only once writes go quiet, capped at
+     * watcherMaxDebounceMs so continuous churn cannot starve the pass forever.
+     */
+    const schedule = (delayMs: number, slide = false): void => {
         if (stopping) return;
         if (passing) {
             pending = true;
             return;
         }
-        if (timer) return;
+        if (timer) {
+            // slide (watcher churn): postpone, but keep the burst's start time so
+            // the cap still bounds total latency; otherwise the first event wins
+            if (!slide || Date.now() - timerArmedAt >= watcherMaxDebounceMs) return;
+            clearTimeout(timer);
+        } else {
+            timerArmedAt = Date.now();
+        }
         timer = setTimeout(() => {
             timer = null;
             void doPass();
@@ -412,6 +425,10 @@ async function daemon(): Promise<void> {
         lastPassStartedAt = Date.now();
         setStatus({ state: 'passing' });
         try {
+            // reload per pass (not per watcher event) so a burst of changes does
+            // not re-read/compile .protonignore thousands of times, while an edit
+            // to .protonignore still takes effect on the pass it triggers
+            loadFilters();
             const s = await runPass({ forceFull: false });
             if (s.authFailed) log('ERROR', 'authentication required; will retry on the next change (re-login via the official proton-drive CLI if this persists)');
             maybeAutoEvict(new Set(hydrating.keys()));
@@ -541,10 +558,25 @@ async function daemon(): Promise<void> {
         schedule(0);
     };
     remote.startEventLoop(() => schedule(1000));
-    const stopWatch = startWatcher(() => {
-        loadFilters();
-        schedule(3000);
-    });
+    const watch = startWatcher(() => schedule(watcherDebounceMs, true));
+    // Safety net: the watcher is a fast path, not a guarantee. If it is missing,
+    // permanently crashed, or reports partial coverage (inotify watch limit), fall
+    // back to a low-frequency incremental pass so local edits still sync. While the
+    // watcher is healthy the poll stays silent (no periodic full walk).
+    const pollMs = watcherPollMs();
+    const pollTimer =
+        pollMs > 0
+            ? setInterval(() => {
+                  if (stopping) return;
+                  // only act when nothing is already queued or running, so a busy
+                  // engine does not log a warning on every tick
+                  if (!watch.healthy() && !passing && !pending && !timer) {
+                      log('WARN', 'file watcher not healthy; running a safety sync pass');
+                      schedule(0);
+                  }
+              }, pollMs)
+            : null;
+    if (pollTimer) pollTimer.unref();
 
     await new Promise<void>((resolve) => {
         const shutdown = (sig: string): void => {
@@ -553,7 +585,8 @@ async function daemon(): Promise<void> {
             syncNowHook = null;
             log('INFO', `${sig} received; shutting down`);
             if (timer) clearTimeout(timer);
-            stopWatch();
+            if (pollTimer) clearInterval(pollTimer);
+            watch.stop();
             remote.stopEventLoop();
             stopRpcServer();
             void stopMount().then(() => {

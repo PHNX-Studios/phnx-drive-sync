@@ -182,7 +182,15 @@ script environment.
 `- pattern` = exclude (bare patterns also exclude; `+` lines ignored). Matched
 against full path and basename; filtered directories are not descended into.
 The engine itself additionally never syncs `.protonignore` or `*.drivesync.part`
-(upload temp files). Filters reload on every watcher wake.
+(upload temp files). Filters reload at the start of every pass, so editing
+`.protonignore` takes effect on the pass that edit triggers (the watcher no
+longer ignores its own events).
+
+Filters are a **mirror**: a path that matches is treated exactly like a local
+deletion, so an already-synced file whose remote copy still exists is moved to
+Proton's trash on the next pass (recoverable from Proton, but removed from the
+local tree's sync set). Add patterns with care, and expect newly-ignored files
+to disappear from Proton Drive.
 
 ## State & ops
 
@@ -217,14 +225,23 @@ location), `DRIVE_SYNC_REMOTE` (path under *My files*,
 default: whole drive), `DRIVE_SYNC_HOME` (relocate all state — used for isolated
 tests), `DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `DRIVE_SYNC_NEW_FILES` (`local`|`online`),
 `DRIVE_SYNC_EVICT_FREE_GB` (auto-evict threshold, 0 = off),
-`DRIVE_SYNC_PREFETCH` (sidecar recall-on-hover default, off unless set).
+`DRIVE_SYNC_PREFETCH` (sidecar recall-on-hover default, off unless set),
+`DRIVE_SYNC_POLL_MS` (watcher-unhealthy safety poll interval, 0 = off).
 
 A full remote walk of the current tree (~10.3k nodes, 1.27k folders) takes
 ~5 min warm, so it runs **once at login** (the initial pass), and afterwards
 only when the event stream reports a gap and asks for a resync. Everything
 else is incremental: the watcher (inotifywait) and the remote event stream
 trigger passes within seconds of a change, and *Sync now* forces one on
-demand. There is no periodic poller.
+demand. There is no periodic *full* walk.
+
+The watcher is a fast path, not a guarantee: if `inotifywait` is missing or
+crashes, the event stream is unavailable, or the kernel's inotify watch limit
+truncates coverage, the engine falls back to a low-frequency **safety poll**
+(`DRIVE_SYNC_POLL_MS`, default 2 min) that runs an incremental pass. While the
+watcher is healthy the poll stays silent. inotify-tools `-r` also watches
+directories created or moved into the tree after startup, so new subtrees are
+covered without a restart.
 
 Auth failures surface in `status.json` (`auth-required`) and are retried each
 interval — re-login with the official CLI:

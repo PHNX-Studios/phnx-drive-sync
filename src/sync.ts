@@ -319,6 +319,9 @@ export function classify(
             }
             const sameR = fileEq(rSize(rn), rMtime(rn), se!.rsize!, se!.rmtime!);
             if (sameR) {
+                // no local copy, no online marker: a real local delete or a path
+                // .protonignore now matches. Filters are a mirror (option b), so
+                // both trash the remote - recoverable from Proton's trash.
                 actions.push({ phase: 'trashRemote', p, uid: rn.uid, dir: false });
                 s.deletes++;
             } else {

@@ -27,6 +27,25 @@ export const seedAdoptWindowMs = 10_000;
 export const eventIdleTimeoutMs = Number(process.env.DRIVE_SYNC_EVENT_IDLE_MS || 20_000);
 export const watcherDebounceMs = 3_000;
 
+/**
+ * Safety-poll interval (ms). The inotify watcher is the fast path; when it is
+ * missing, permanently crashed, or reports only partial coverage (watch limit),
+ * the daemon falls back to a low-frequency incremental pass at this interval so
+ * local edits still sync. While the watcher is healthy the poll stays silent.
+ * 0 disables the safety net entirely (`DRIVE_SYNC_POLL_MS=0`).
+ */
+export function watcherPollMs(): number {
+    const v = Number(process.env.DRIVE_SYNC_POLL_MS || 120_000);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/**
+ * Upper bound (ms) on how long the sliding watcher debounce may postpone a pass
+ * while local writes keep arriving. Without it, one continuously-written file
+ * (a log, a VM image) could starve every pass, including remote-triggered ones.
+ */
+export const watcherMaxDebounceMs = 30_000;
+
 /** Newly-appeared remote files: `local` (default, download) or `online` (placeholder). Read per call so tests can flip it. */
 export function newFilesMode(): 'local' | 'online' {
     return (process.env.DRIVE_SYNC_NEW_FILES ?? '').trim().toLowerCase() === 'online' ? 'online' : 'local';

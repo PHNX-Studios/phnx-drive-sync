@@ -142,3 +142,21 @@ describe('classify: seed adoption', () => {
         expect(st.syncGet(p)).toMatchObject({ uid: 'uid-seed', lsize: SIZE, rsize: SIZE });
     });
 });
+
+describe('classify: filtering a synced file mirrors the local delete (option b)', () => {
+    // A steady, previously-synced file that now matches .protonignore: walkLocal()
+    // no longer returns it (L is empty), but the incremental remote cache and the
+    // baseline still hold it. Chosen semantics: mirror the local absence, so the
+    // remote copy is trashed (recoverable from Proton) rather than left orphaned.
+    test('a steady file that becomes filtered is trashed remotely', () => {
+        const p = 'secret/notes.txt';
+        const SIZE = 2048;
+        const MTIME = 1_700_000_300_000;
+        seedRow(steadyFile(p, SIZE, MTIME));
+        const R = new Map([[p, remoteFile('uid-1', SIZE, MTIME)]]);
+        const S = new Map([[p, st.syncGet(p)!]]);
+        const { actions, stats } = run(new Map(), R, S, new Map());
+        expect(actions).toEqual([{ phase: 'trashRemote', p, uid: 'uid-1', dir: false }]);
+        expect(stats.deletes).toBe(1);
+    });
+});
