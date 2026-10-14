@@ -204,6 +204,11 @@ mkdir -p "$BIN" "$CONFIG_DIR" "$UNIT_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DI
 if [ "$SYSTEMD_USER" -eq 1 ]; then
     systemctl --user stop proton-drive-sync-tray.service proton-drive-sync.service 2>/dev/null || true
 fi
+# a tray launched via XDG autostart lives outside the unit's cgroup; stop it too,
+# or it keeps the single-instance lock and the freshly installed tray exits
+if command -v pkill >/dev/null 2>&1; then
+    pkill -f 'proton-drive-sync-tray.py' 2>/dev/null || true
+fi
 
 # app code only; user state lives under ~/.local/{share,state}/drive-sync and is never touched
 rm -rf "$LIB"
