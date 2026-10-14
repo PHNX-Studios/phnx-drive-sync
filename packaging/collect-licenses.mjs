@@ -138,7 +138,7 @@ const lines = [
     `Packages:  ${sorted.length}`,
     '',
     'These packages are present in the vendored dependency tree and may be bundled',
-    'into the compiled proton-drive-sync binaries. Each retains its own license; the',
+    'into the compiled phnx-drive-sync binaries. Each retains its own license; the',
     'declared identifier and, where available, the license text follow.',
     '',
 ];

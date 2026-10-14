@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build a single, portable, self-contained release tarball for Proton Drive Sync.
+# Build a single, portable, self-contained release tarball for PHNX Drive Sync.
 #
 # Output (in dist/):
-#   proton-drive-sync-<version>-linux-<arch>.tar.gz
-#   latest.json            (release manifest consumed by `proton-drive-sync update`)
+#   phnx-drive-sync-<version>-linux-<arch>.tar.gz
+#   latest.json            (release manifest consumed by `phnx-drive-sync update`)
 #
 # The tarball contains the engine compiled to a self-contained glibc-2.17 binary
 # (Bun runtime + all node_modules + SDK WASM embedded), the bundled login CLI,
@@ -32,7 +32,7 @@ case "$(uname -m)" in
     *) echo "build: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
 
-NAME="proton-drive-sync-$VERSION-linux-$TARBALL_ARCH"
+NAME="phnx-drive-sync-$VERSION-linux-$TARBALL_ARCH"
 STAGE="dist/$NAME"
 TARBALL="dist/$NAME.tar.gz"
 
@@ -53,9 +53,9 @@ echo "build: compiling engine"
     --compile \
     --target="bun-linux-$TARGET" \
     --minify \
-    --outfile "$STAGE/proton-drive-sync-engine"
+    --outfile "$STAGE/phnx-drive-sync-engine"
 
-# --- official login CLI (best effort; enables `proton-drive-sync login`) --
+# --- official login CLI (best effort; enables `phnx-drive-sync login`) --
 JS_VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' vendor/client/js/package.json | head -n1)"
 if [ -f vendor/cli/scripts/build-cli.mjs ]; then
     echo "build: compiling login CLI"
@@ -63,7 +63,7 @@ if [ -f vendor/cli/scripts/build-cli.mjs ]; then
     # and point the output at an absolute path.
     if ! ( cd vendor/cli && CLI_OUTPUT_DIR="$ROOT/$STAGE" CLI_VERSION="$VERSION" JS_VERSION="${JS_VERSION:-0.0.1}" \
         "$BUN" scripts/build-cli.mjs src/proton-drive.ts "bun-linux-$TARGET" >/dev/null ); then
-        echo "build: WARNING: login CLI build failed; 'proton-drive-sync login' will require a system proton-drive" >&2
+        echo "build: WARNING: login CLI build failed; 'phnx-drive-sync login' will require a system proton-drive" >&2
         rm -f "$STAGE/proton-drive"
     fi
 fi
@@ -80,16 +80,16 @@ cp -a python "$STAGE/"
 cp -a tray "$STAGE/"
 cp -a assets "$STAGE/"
 
-cp -a packaging/systemd/user/proton-drive-sync.service \
-      packaging/systemd/user/proton-drive-sync-tray.service \
-      packaging/systemd/user/proton-drive-sync-update.service \
-      packaging/systemd/user/proton-drive-sync-update.timer \
+cp -a packaging/systemd/user/phnx-drive-sync.service \
+      packaging/systemd/user/phnx-drive-sync-tray.service \
+      packaging/systemd/user/phnx-drive-sync-update.service \
+      packaging/systemd/user/phnx-drive-sync-update.timer \
       "$STAGE/share/systemd/user/"
 
-cp -a packaging/desktop/proton-drive-sync-restart.desktop.in "$STAGE/share/"
-cp -a packaging/desktop/proton-drive-sync-tray.desktop.in "$STAGE/share/autostart/"
+cp -a packaging/desktop/phnx-drive-sync-restart.desktop.in "$STAGE/share/"
+cp -a packaging/desktop/phnx-drive-sync-tray.desktop.in "$STAGE/share/autostart/"
 
-cp -a packaging/bin/proton-drive-sync-tray "$STAGE/share/bin/"
+cp -a packaging/bin/phnx-drive-sync-tray "$STAGE/share/bin/"
 cp -a "tray/nautilus-scripts/Proton Drive/." "$STAGE/share/nautilus-scripts/Proton Drive/"
 
 cp -a packaging/install.sh "$STAGE/install.sh"
@@ -103,7 +103,7 @@ if "$BUN" packaging/collect-licenses.mjs "$STAGE/THIRD_PARTY_LICENSES.txt" vendo
 else
     echo "build: WARNING: could not collect embedded dependency licenses" >&2
 fi
-chmod +x "$STAGE/install.sh" "$STAGE/proton-drive-sync-engine"
+chmod +x "$STAGE/install.sh" "$STAGE/phnx-drive-sync-engine"
 [ -x "$STAGE/proton-drive" ] && chmod +x "$STAGE/proton-drive"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
@@ -115,7 +115,7 @@ find "$STAGE" -type f \( -name '*.pyc' -o -name '*.map' \) -delete 2>/dev/null |
 echo "build: packing $TARBALL"
 tar -C dist -czf "$TARBALL" "$NAME"
 SHA="$(sha256sum "$TARBALL" | awk '{print $1}')"
-BASE="${RELEASE_BASE_URL:-https://github.com/proton-drive-sync/proton-drive-sync/releases/download/v$VERSION}"
+BASE="${RELEASE_BASE_URL:-https://github.com/PHNX-Studios/phnx-drive-sync/releases/download/v$VERSION}"
 cat > dist/latest.json <<EOF
 {
   "version": "$VERSION",

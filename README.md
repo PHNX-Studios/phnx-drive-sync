@@ -1,16 +1,16 @@
-# proton-drive-sync
+# PHNX Drive Sync
 
 Bidirectional sync engine between `~/Proton Drive` and Proton Drive (`/my-files`),
 built directly on the official [Proton Drive SDK](https://github.com/ProtonDriveApps/sdk)
 (vendored in `vendor/`).
 
-> **Unofficial third-party application.** Proton Drive Sync is an independent
+> **Unofficial third-party application.** PHNX Drive Sync is an independent
 > project. It is **not** affiliated with, endorsed by, or supported by Proton AG.
 > "Proton" and "Proton Drive" are trademarks of Proton AG, used here only to
 > describe interoperability. Proton requires third-party clients to identify
 > themselves honestly and not masquerade as first-party software; this
 > application sends an `x-pm-appversion` header of the form
-> `external-drive-syncengine@<version>` and talks only to official endpoints.
+> `external-drive-phnx_drive_sync@<version>` and talks only to official endpoints.
 
 Requires: [bun](https://bun.sh) and an authenticated session via the official
 `proton-drive` CLI (`proton-drive` re-login if the session expires).
@@ -19,7 +19,7 @@ Requires: [bun](https://bun.sh) and an authenticated session via the official
 
 > **Pre-release.** No release tarballs are published yet. Until the first
 > release is uploaded, build one locally with `bash packaging/build.sh` and run
-> the resulting `dist/proton-drive-sync-<version>-linux-<arch>.tar.gz` installer.
+> the resulting `dist/phnx-drive-sync-<version>-linux-<arch>.tar.gz` installer.
 
 Download the release tarball for your architecture, then run its installer. It
 is self-contained: the engine and the official login CLI are compiled to single
@@ -41,22 +41,22 @@ the engine still performs full bidirectional sync, but `~/Proton Drive` stays
 empty (the tray shows "Mount degraded").
 
 ```sh
-tar xzf proton-drive-sync-<version>-linux-<arch>.tar.gz
-cd proton-drive-sync-<version>-linux-<arch>
+tar xzf phnx-drive-sync-<version>-linux-<arch>.tar.gz
+cd phnx-drive-sync-<version>-linux-<arch>
 ./install.sh                 # detects the distro, installs host deps, wires everything
-proton-drive-sync login      # the only manual step: sign in to Proton Drive
+phnx-drive-sync login      # the only manual step: sign in to Proton Drive
 ```
 
 Installer flags: `--no-system-deps` (skip the elevated package-manager step; the
 user-level fallback still runs), `--no-deps` (install no dependencies at all),
-`--enable-autoupdate` / `--disable-autoupdate` (weekly `proton-drive-sync update`
+`--enable-autoupdate` / `--disable-autoupdate` (weekly `phnx-drive-sync update`
 via a systemd user timer), and `--force` (reinstall the same version).
 
 Upgrades are handled by re-running a newer tarball's installer: it refuses to
 downgrade, no-ops on the same version, and preserves all state under
 `~/.local/share/drive-sync` and `~/.local/state/drive-sync`.
 
-`proton-drive-sync update` trusts the configured release host over TLS and
+`phnx-drive-sync update` trusts the configured release host over TLS and
 verifies the tarball's SHA-256 from the release manifest before running the
 installer (as the ordinary user). It refuses releases whose `min_glibc`/
 `min_kernel`/`min_python` exceed the host, so an old machine is never handed a
@@ -65,22 +65,22 @@ binary it cannot run. Point it at a mirror with `DRIVE_SYNC_RELEASE_URL` or
 
 ## Usage
 
-Once installed the `proton-drive-sync` command is on `~/.local/bin` (from a dev
-checkout use `bun run src/index.ts <cmd>` or `./proton-drive-sync.sh <cmd>`):
+Once installed the `phnx-drive-sync` command is on `~/.local/bin` (from a dev
+checkout use `bun run src/index.ts <cmd>` or `./phnx-drive-sync.sh <cmd>`):
 
 ```sh
-proton-drive-sync run            # daemon: initial full pass, then events + watcher + interval
-proton-drive-sync once           # single full pass (exit 0 ok, 2 errors, 3 auth)
-proton-drive-sync once --dry-run # classify only: report planned actions, change nothing
-proton-drive-sync status         # print status.json
-proton-drive-sync unpin <paths…> # free local space; files stay on Proton Drive
-proton-drive-sync pin <paths…>   # download online-only files back to this device
-proton-drive-sync evict [paths…] # bulk "Free up space": no paths = every local file
-proton-drive-sync prefetch on|off|status  # recall-on-hover toggle (default off)
-proton-drive-sync login          # sign in to Proton Drive (bundled official CLI)
-proton-drive-sync restart        # systemctl --user restart + wait for the FUSE mount
-proton-drive-sync update [--check]  # install a newer release, if one is available
-proton-drive-sync version        # print the version
+phnx-drive-sync run            # daemon: initial full pass, then events + watcher + interval
+phnx-drive-sync once           # single full pass (exit 0 ok, 2 errors, 3 auth)
+phnx-drive-sync once --dry-run # classify only: report planned actions, change nothing
+phnx-drive-sync status         # print status.json
+phnx-drive-sync unpin <paths…> # free local space; files stay on Proton Drive
+phnx-drive-sync pin <paths…>   # download online-only files back to this device
+phnx-drive-sync evict [paths…] # bulk "Free up space": no paths = every local file
+phnx-drive-sync prefetch on|off|status  # recall-on-hover toggle (default off)
+phnx-drive-sync login          # sign in to Proton Drive (bundled official CLI)
+phnx-drive-sync restart        # systemctl --user restart + wait for the FUSE mount
+phnx-drive-sync update [--check]  # install a newer release, if one is available
+phnx-drive-sync version        # print the version
 ```
 
 `pin`/`unpin`/`evict` talk to the running daemon over a unix socket (`rpc.sock`),
@@ -93,20 +93,20 @@ stdout/stderr).
 systemd (user): the installer enables and starts the units. To drive them by hand:
 
 ```sh
-systemctl --user status proton-drive-sync.service proton-drive-sync-tray.service
-systemctl --user restart proton-drive-sync.service
-journalctl --user -u proton-drive-sync.service -f
+systemctl --user status phnx-drive-sync.service phnx-drive-sync-tray.service
+systemctl --user restart phnx-drive-sync.service
+journalctl --user -u phnx-drive-sync.service -f
 ```
 
-The installer deploys the compiled runtime to `~/.local/lib/proton-drive-sync/`
+The installer deploys the compiled runtime to `~/.local/lib/phnx-drive-sync/`
 on the **internal disk** and points the systemd user units and XDG autostart
 there — startup never waits on an external drive (state the engine manages
 already lives under `~/.local`). Upgrades reuse the same installer.
 
 Auto-start: the service is `enabled`, so it starts at login; the tray is
-autostarted via `~/.config/autostart/proton-drive-sync-tray.desktop` and also via `proton-drive-sync-tray.service` user unit for resilience. If the engine
-ever needs a manual kick, **Proton Drive Sync (restart engine)** in the application
-menu (and on the Desktop) runs `proton-drive-sync restart` — restarts the service,
+autostarted via `~/.config/autostart/phnx-drive-sync-tray.desktop` and also via `phnx-drive-sync-tray.service` user unit for resilience. If the engine
+ever needs a manual kick, **PHNX Drive Sync (restart engine)** in the application
+menu (and on the Desktop) runs `phnx-drive-sync restart` — restarts the service,
 waits for the FUSE heartbeat to come back, and reports the result via
 `notify-send`. If the sidecar dies while the engine runs, the engine relaunches
 it automatically within seconds (see `mount` in `status.json`); the tray's
@@ -115,7 +115,7 @@ it automatically within seconds (see `mount` in `status.json`); the tray's
 Tray icon (live status, storage, controls — autostarted):
 
 ```sh
-tray/proton-drive-sync-tray.py   # 2x2 status grid, Actions submenu, Pause/Resume
+tray/phnx-drive-sync-tray.py   # 2x2 status grid, Actions submenu, Pause/Resume
 ```
 
 The menu shows a 2x2 status grid (sync status | storage, online-only |
@@ -125,9 +125,9 @@ cell tracks the current item and its `(done/total)` progress.
 
 - **Sync now** sends the daemon `SIGUSR1` (runs an immediate incremental pass,
   ~0.5 s) or starts the unit if paused.
-- **Pause/Resume** stops/starts `proton-drive-sync.service`.
+- **Pause/Resume** stops/starts `phnx-drive-sync.service`.
 - **Free up space (all local files)** appears whenever there is reclaimable
-  space and runs the same bulk evict as `proton-drive-sync.sh evict` (keep-marked and
+  space and runs the same bulk evict as `phnx-drive-sync.sh evict` (keep-marked and
   unsynced files stay local).
 - Icon states: idle (green), syncing (orange, incl. long full walks), error
   (red: service failed / auth required / last pass errored), paused (grey).
@@ -168,15 +168,15 @@ see zero-fill: reading a placeholder blocks, downloads the content from the
 baseline (byte-identical) and materializes the file — OneDrive recall
 semantics. Writes to a placeholder materialize first, then write.
 
-- `proton-drive-sync.sh unpin 'path/…'` — after ensuring the latest local bytes are
+- `phnx-drive-sync.sh unpin 'path/…'` — after ensuring the latest local bytes are
   synced, marks the file online-only and drops the local bytes. It stays
   visible through the mount; the next open/recall re-downloads it.
-- `proton-drive-sync.sh pin 'path/…'` — recall explicitly (download + clear the mark),
+- `phnx-drive-sync.sh pin 'path/…'` — recall explicitly (download + clear the mark),
   byte-identical from the baseline (uid/size/mtime). `pin` also sets a
   **keep-on-this-device** mark: auto-eviction and bulk free will never touch
   that file until an `unpin` (or a free-up-space) clears the mark — last
   explicit instruction wins.
-- `proton-drive-sync.sh evict [path/…]` — bulk *Free up space* (no paths = every
+- `phnx-drive-sync.sh evict [path/…]` — bulk *Free up space* (no paths = every
   materialized file). Only clean, synced, non-keep-marked files are freed,
   largest first; unsynced edits and keep-marked files stay local. The same
   action is available from the tray menu.
@@ -185,7 +185,7 @@ semantics. Writes to a placeholder materialize first, then write.
   moves into the local `.Trash-<uid>` (never synced) and is trashed remotely
   on the next pass.
 
-**Recall on hover (prefetch, default off).** With `proton-drive-sync.sh prefetch on`,
+**Recall on hover (prefetch, default off).** With `phnx-drive-sync.sh prefetch on`,
 any lookup of a placeholder through the mount (hover, preview, directory stat)
 queues a background download instead of waiting for the first open; two
 downloads run in parallel, the rest queue. `prefetch off` (the default)
@@ -270,8 +270,8 @@ to disappear from Proton Drive.
 | daemon pid lock | `~/.local/state/drive-sync/daemon.lock` (stale-aware) |
 | pin/unpin rpc socket | `~/.local/state/drive-sync/rpc.sock` (unlinked at boot/shutdown) |
 | sidecar heartbeat (tray mount check) | `~/.local/state/drive-sync/mount-ok` |
-| tray icon + icons | `~/.local/lib/proton-drive-sync/tray/` (launcher: `~/.local/bin/proton-drive-sync-tray`; autostart: `~/.config/autostart/proton-drive-sync-tray.desktop`) |
-| installed runtime (internal disk) | `~/.local/lib/proton-drive-sync/` (compiled engine + bundled login CLI + sidecar/tray; installed from the release tarball) |
+| tray icon + icons | `~/.local/lib/phnx-drive-sync/tray/` (launcher: `~/.local/bin/phnx-drive-sync-tray`; autostart: `~/.config/autostart/phnx-drive-sync-tray.desktop`) |
+| installed runtime (internal disk) | `~/.local/lib/phnx-drive-sync/` (compiled engine + bundled login CLI + sidecar/tray; installed from the release tarball) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
 last pass info, error counts, the recall-on-hover `prefetch` toggle, and
@@ -326,14 +326,14 @@ interval — re-login with the official CLI:
 cd vendor/cli && bun install        # bootstrap deps (node_modules is a symlink into vendor)
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
 bun test test/                      # classify/placeholder/evict unit tests (temp state)
-./proton-drive-sync.sh once --dry-run      # classify without changing anything
+./phnx-drive-sync.sh once --dry-run      # classify without changing anything
 bash packaging/build.sh             # build the portable release tarball into dist/
 ```
 
 `packaging/build.sh` compiles `src/index.ts` and the login CLI into
 self-contained binaries (Bun runtime + all modules embedded, glibc 2.17+),
-assembles the runtime resources, and emits `dist/proton-drive-sync-<version>-linux-<arch>.tar.gz`
-plus `dist/latest.json` (the manifest `proton-drive-sync update` consumes).
+assembles the runtime resources, and emits `dist/phnx-drive-sync-<version>-linux-<arch>.tar.gz`
+plus `dist/latest.json` (the manifest `phnx-drive-sync update` consumes).
 The release version comes from the root `package.json`.
 
 ## Known caveats
@@ -367,5 +367,5 @@ and the operational rules that apply to third-party clients of Proton's hosted
 services; the generated `THIRD_PARTY_LICENSES.txt` (shipped in each release)
 lists every embedded package with its license text.
 
-Proton Drive Sync is an independent, unofficial application and is not
+PHNX Drive Sync is an independent, unofficial application and is not
 affiliated with or supported by Proton AG.

@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 // Version lives in the repository root package.json (single source of truth),
-// which also drives the package artifacts and `proton-drive-sync version`.
+// which also drives the package artifacts and `phnx-drive-sync version`.
 export { APP_VERSION } from './version';
 export const CLIENT_UID_PREFIX = 'syncengine';
 
@@ -48,7 +48,7 @@ export function watcherPollMs(): number {
  * operation before unmounting and exiting (ms, default 120000). The pass stops
  * at the next action boundary once shutdown is requested, so this only bounds
  * the wait for the operation already running. Keep systemd's `TimeoutStopSec`
- * on proton-drive-sync.service above this value so the graceful path wins.
+ * on phnx-drive-sync.service above this value so the graceful path wins.
  */
 export function shutdownGraceMs(): number {
     const v = Number(process.env.DRIVE_SYNC_SHUTDOWN_GRACE_MS || 120_000);

@@ -1,6 +1,6 @@
-# Contributing to Proton Drive Sync
+# Contributing to PHNX Drive Sync
 
-Thanks for your interest in improving Proton Drive Sync. This is an independent,
+Thanks for your interest in improving PHNX Drive Sync. This is an independent,
 unofficial project and is not affiliated with Proton AG.
 
 ## Ground rules
@@ -17,8 +17,8 @@ Requirements: [Bun](https://bun.sh) >= 1.4.2. Everything else is installed at
 runtime by the packaged installer.
 
 ```sh
-git clone https://github.com/proton-drive-sync/proton-drive-sync.git
-cd proton-drive-sync
+git clone https://github.com/PHNX-Studios/phnx-drive-sync.git
+cd phnx-drive-sync
 
 # runtime dependencies live in vendor/cli (node_modules is a symlink into vendor)
 cd vendor/cli && bun install && cd ../..
@@ -30,7 +30,7 @@ cd vendor/cli && bun install && cd ../..
 bun test test/
 
 # classify only, change nothing
-./proton-drive-sync.sh once --dry-run
+./phnx-drive-sync.sh once --dry-run
 
 # build the portable release tarball into dist/
 bash packaging/build.sh

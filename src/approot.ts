@@ -6,7 +6,7 @@ import path from 'node:path';
  * `tray/`). It differs between a dev checkout and an installed, compiled build:
  *
  * - compiled single-file binary (`bun build --compile`): `process.execPath` is
- *   `<libdir>/proton-drive-sync-engine` and `import.meta.dir` is the virtual
+ *   `<libdir>/phnx-drive-sync-engine` and `import.meta.dir` is the virtual
  *   `/$bunfs/root`, so the executable's own directory is the anchor.
  * - `bun run src/index.ts` from a checkout: `process.execPath` is the bun
  *   binary, so fall back to the source-tree root (one level above `src/`).

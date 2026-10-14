@@ -39,9 +39,9 @@ First public release.
 - Nautilus cloud/check badges and context-menu scripts; a tray icon with sync
   status, storage, and Free up space.
 - Single self-updating release tarball: a compiled engine and login CLI, a
-  portable `install.sh`, and `proton-drive-sync update` with SHA-256
+  portable `install.sh`, and `phnx-drive-sync update` with SHA-256
   verification and host-version gates.
 - Graceful shutdown that finishes the in-flight file operation before exiting.
 
-[Unreleased]: https://github.com/proton-drive-sync/proton-drive-sync/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/proton-drive-sync/proton-drive-sync/releases/tag/v0.2.0
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/PHNX-Studios/phnx-drive-sync/releases/tag/v0.2.0

@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Proton Drive Sync
-Comment=Bidirectional sync tray icon for Proton Drive
-Exec=@HOME@/.local/bin/proton-drive-sync-tray
-Terminal=false
-NoDisplay=true
-X-GNOME-Autostart-enabled=true

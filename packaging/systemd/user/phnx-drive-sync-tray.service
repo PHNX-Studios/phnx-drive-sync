@@ -1,6 +1,6 @@
 [Unit]
-Description=Proton Drive Sync tray icon
-Documentation=file:%h/.local/lib/proton-drive-sync/README.md
+Description=PHNX Drive Sync tray icon (unofficial)
+Documentation=file:%h/.local/lib/phnx-drive-sync/README.md
 PartOf=graphical-session.target
 After=graphical-session.target
 BindsTo=graphical-session.target
@@ -17,7 +17,7 @@ Environment=NO_AT_BRIDGE=1
 # overrides the real graphical session and breaks non-:0 / pure-Wayland setups.
 # The user manager imports the session environment; the XDG autostart entry is
 # the primary tray launcher regardless.
-ExecStart=%h/.local/bin/proton-drive-sync-tray
+ExecStart=%h/.local/bin/phnx-drive-sync-tray
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10

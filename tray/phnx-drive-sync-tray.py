@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Proton Drive Sync tray icon: live status, storage and controls for proton-drive-sync.service."""
+"""PHNX Drive Sync tray icon: live status, storage and controls for phnx-drive-sync.service."""
 
 import fcntl
 import json
@@ -25,7 +25,7 @@ except (ValueError, ImportError):
     from gi.repository import AppIndicator3 as AppIndicator3
 from gi.repository import GLib, Gtk
 
-SYNC_UNIT = "proton-drive-sync.service"
+SYNC_UNIT = "phnx-drive-sync.service"
 SYNC_DIR = os.path.expanduser("~/Proton Drive")
 ICON_DIR = os.path.join(_HERE, "icons")
 STATE_DIR = os.path.expanduser("~/.local/state/drive-sync")
@@ -36,10 +36,10 @@ MOUNT_STALE_S = 15  # sidecar heartbeats every 2s; anything older means it died
 EVICT_LABEL = "Free up space (all local files)"
 
 ICONS = {
-    "idle": "proton-drive-sync-idle",
-    "syncing": "proton-drive-sync-syncing",
-    "error": "proton-drive-sync-error",
-    "paused": "proton-drive-sync-paused",
+    "idle": "phnx-drive-sync-idle",
+    "syncing": "phnx-drive-sync-syncing",
+    "error": "phnx-drive-sync-error",
+    "paused": "phnx-drive-sync-paused",
 }
 
 STATE = {"state": "idle", "detail": "Starting...", "active": False, "evicting": False}
@@ -151,7 +151,7 @@ def sync_progress_text(status):
 
 
 def rpc_call(op, paths, timeout=15 * 60):
-    """Talk to the proton-drive-sync daemon over its unix socket (pin/unpin/evict/prefetch...)."""
+    """Talk to the phnx-drive-sync daemon over its unix socket (pin/unpin/evict/prefetch...)."""
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
@@ -322,7 +322,7 @@ def _evict_done(err):
     evict_item.set_sensitive(True)
     evict_item.set_label(EVICT_LABEL)
     if err:
-        subprocess.run(["notify-send", "Proton Drive Sync", err], capture_output=True)
+        subprocess.run(["notify-send", "PHNX Drive Sync", err], capture_output=True)
     poll()
     return False
 
@@ -348,7 +348,7 @@ def poll():
 
 
 def main():
-    lock_path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "proton-drive-sync-tray.lock")
+    lock_path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "phnx-drive-sync-tray.lock")
     lock_handle = open(lock_path, "w")
     try:
         fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -358,10 +358,10 @@ def main():
     global indicator, info_primary, info_secondary, actions_item, pause_item, evict_item
 
     indicator = AppIndicator3.Indicator.new(
-        "proton-drive-sync", ICONS["idle"], AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
+        "phnx-drive-sync", ICONS["idle"], AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
     )
     indicator.set_icon_theme_path(ICON_DIR)
-    indicator.set_title("Proton Drive Sync")
+    indicator.set_title("PHNX Drive Sync (unofficial)")
     indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
 
     menu = Gtk.Menu()

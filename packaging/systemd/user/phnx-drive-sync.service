@@ -1,6 +1,6 @@
 [Unit]
-Description=Proton Drive Sync engine (bidirectional sync with Proton Drive)
-Documentation=file:%h/.local/lib/proton-drive-sync/README.md
+Description=PHNX Drive Sync engine (unofficial client for Proton Drive)
+Documentation=file:%h/.local/lib/phnx-drive-sync/README.md
 After=network-online.target
 Wants=network-online.target
 
@@ -8,9 +8,9 @@ Wants=network-online.target
 Type=simple
 # self-contained compiled binary (installed by packaging/install.sh); no bun,
 # sources or node_modules are needed at runtime
-ExecStart=%h/.local/lib/proton-drive-sync/proton-drive-sync-engine run
+ExecStart=%h/.local/lib/phnx-drive-sync/phnx-drive-sync-engine run
 # optional per-user overrides (DRIVE_SYNC_*, PROTON_DRIVE_*); created by install.sh
-EnvironmentFile=-%h/.config/proton-drive-sync/env
+EnvironmentFile=-%h/.config/phnx-drive-sync/env
 # find user-installed helpers (e.g. a user-local inotifywait in ~/.local/bin,
 # which may itself need ~/.local/lib); system-installed tools work regardless
 Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

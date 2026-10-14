@@ -1,0 +1,9 @@
+[Unit]
+Description=PHNX Drive Sync auto-update check (unofficial)
+Documentation=file:%h/.local/lib/phnx-drive-sync/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/lib/phnx-drive-sync/phnx-drive-sync-engine update

@@ -670,7 +670,7 @@ async function daemon(): Promise<void> {
 
 function usage(): string {
     return [
-        'usage: proton-drive-sync <command> [options]',
+        'usage: phnx-drive-sync <command> [options]',
         '',
         'commands:',
         '  run                        daemon: initial full pass, then events + watcher (default)',
@@ -692,7 +692,7 @@ function login(): number {
     // Proton requires a clear third-party disclosure when prompting for account
     // details (see vendor/README.md, "Product and legal requirements").
     console.error(
-        'Proton Drive Sync is an independent, unofficial application.\n' +
+        'PHNX Drive Sync is an independent, unofficial application.\n' +
             'This is a third-party application not officially supported by Proton.',
     );
     const bundled = path.join(appRoot, 'proton-drive');
@@ -701,7 +701,7 @@ function login(): number {
     if (r.error) {
         if ((r.error as NodeJS.ErrnoException).code === 'ENOENT') {
             console.error(
-                'proton-drive CLI not found. Reinstall proton-drive-sync, or install the official\n' +
+                'proton-drive CLI not found. Reinstall phnx-drive-sync, or install the official\n' +
                     'proton-drive CLI and run: proton-drive auth login',
             );
             return 127;
@@ -713,14 +713,14 @@ function login(): number {
 }
 
 /**
- * `proton-drive-sync restart`: restart the engine unit and report success only
+ * `phnx-drive-sync restart`: restart the engine unit and report success only
  * once the FUSE sidecar heartbeat is beating again. Used by the desktop
  * launcher; the tray heals a degraded mount on its own.
  */
 async function restartEngine(): Promise<number> {
-    const r = spawnSync('systemctl', ['--user', 'restart', 'proton-drive-sync.service'], { stdio: 'inherit' });
+    const r = spawnSync('systemctl', ['--user', 'restart', 'phnx-drive-sync.service'], { stdio: 'inherit' });
     if (r.error || r.status !== 0) {
-        notify('Engine restart failed - check: systemctl --user status proton-drive-sync');
+        notify('Engine restart failed - check: systemctl --user status phnx-drive-sync');
         return 1;
     }
     const deadline = Date.now() + 60_000;
@@ -733,10 +733,10 @@ async function restartEngine(): Promise<number> {
         } catch {
             /* sidecar is not beating yet */
         }
-        if (spawnSync('systemctl', ['--user', 'is-active', '--quiet', 'proton-drive-sync.service']).status !== 0) break;
+        if (spawnSync('systemctl', ['--user', 'is-active', '--quiet', 'phnx-drive-sync.service']).status !== 0) break;
         await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    notify('Engine restarted, but the FUSE mount did not come up - check: journalctl --user -u proton-drive-sync.service');
+    notify('Engine restarted, but the FUSE mount did not come up - check: journalctl --user -u phnx-drive-sync.service');
     return 1;
 }
 

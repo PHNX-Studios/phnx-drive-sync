@@ -1,9 +1,0 @@
-[Unit]
-Description=Proton Drive Sync auto-update check
-Documentation=file:%h/.local/lib/proton-drive-sync/README.md
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=%h/.local/lib/proton-drive-sync/proton-drive-sync-engine update

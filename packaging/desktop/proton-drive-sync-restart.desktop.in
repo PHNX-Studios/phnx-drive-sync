@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Proton Drive Sync (restart engine)
-Comment=Restart the Proton Drive Sync background engine
-Exec=@HOME@/.local/bin/proton-drive-sync restart
-Icon=proton-drive-sync
-Terminal=false
-Categories=Utility;

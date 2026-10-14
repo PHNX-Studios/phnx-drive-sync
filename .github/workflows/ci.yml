@@ -53,7 +53,7 @@ jobs:
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: proton-drive-sync-tarball
+          name: phnx-drive-sync-tarball
           path: |
             dist/*.tar.gz
             dist/latest.json

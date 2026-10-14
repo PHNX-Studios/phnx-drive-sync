@@ -1,10 +1,10 @@
 # Third-Party Notices
 
-Proton Drive Sync (`proton-drive-sync`) is an independent, unofficial project
+PHNX Drive Sync (`phnx-drive-sync`) is an independent, unofficial project
 released under the MIT License (see [LICENSE](./LICENSE)). It is **not
 affiliated with, endorsed by, or supported by Proton AG**.
 
-Proton Drive Sync is a personal, non-commercial open-source project published by
+PHNX Drive Sync is a personal, non-commercial open-source project published by
 PHNX Studios. It relies on the Proton Drive SDK's allowance for personal,
 non-commercial projects and is not offered for commercial or production use.
 

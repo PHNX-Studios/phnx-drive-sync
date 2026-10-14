@@ -1,5 +1,5 @@
 [Unit]
-Description=Weekly Proton Drive Sync update check
+Description=Weekly PHNX Drive Sync update check (unofficial)
 
 [Timer]
 OnCalendar=weekly

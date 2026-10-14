@@ -1,6 +1,6 @@
 # Security Policy
 
-Proton Drive Sync is an independent, unofficial project and is not affiliated
+PHNX Drive Sync is an independent, unofficial project and is not affiliated
 with Proton AG. It handles Proton account credentials, mounts a FUSE filesystem,
 and installs a self-updating background service, so security reports are taken
 seriously.
@@ -20,7 +20,7 @@ contact channel and disclose no details in the issue itself.
 
 Please include, where relevant:
 
-- Affected version (`proton-drive-sync version`) and how it was installed.
+- Affected version (`phnx-drive-sync version`) and how it was installed.
 - Distribution and kernel (`uname -r`), and whether files-on-demand (FUSE) was
   active.
 - A proof of concept or a precise reproduction, if you have one.
@@ -41,7 +41,7 @@ welcome:
 - **Credential handling.** Login delegates to the official `proton-drive` CLI
   and stores the session in the GNOME keyring. The engine never writes
   credentials to `state.db` or the logs.
-- **Update trust model.** `proton-drive-sync update` trusts the configured
+- **Update trust model.** `phnx-drive-sync update` trusts the configured
   release host over TLS, verifies the release manifest's SHA-256 before running
   the installer, and refuses releases whose `min_glibc` / `min_kernel` /
   `min_python` exceed the host. Reports of a bypass or downgrade path are

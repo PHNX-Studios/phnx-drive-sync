@@ -1,16 +1,16 @@
 {
-    "name": "proton-drive-sync",
+    "name": "phnx-drive-sync",
     "version": "0.2.0",
     "description": "Bidirectional sync between a local folder and Proton Drive, with OneDrive-style files on demand",
     "license": "MIT",
     "author": "PHNX Studios",
-    "homepage": "https://github.com/proton-drive-sync/proton-drive-sync",
+    "homepage": "https://github.com/PHNX-Studios/phnx-drive-sync",
     "repository": {
         "type": "git",
-        "url": "https://github.com/proton-drive-sync/proton-drive-sync.git"
+        "url": "https://github.com/PHNX-Studios/phnx-drive-sync.git"
     },
     "bugs": {
-        "url": "https://github.com/proton-drive-sync/proton-drive-sync/issues"
+        "url": "https://github.com/PHNX-Studios/phnx-drive-sync/issues"
     },
     "engines": {
         "bun": ">=1.4.2"

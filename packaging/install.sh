@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proton Drive Sync - portable installer and upgrader.
+# PHNX Drive Sync - portable installer and upgrader.
 #
 # Run from the extracted release directory (this file sits next to the runtime).
 
@@ -14,7 +14,7 @@ AUTOUPDATE=""
 
 print_help() {
     cat <<'EOF'
-Proton Drive Sync - portable installer and upgrader.
+PHNX Drive Sync - portable installer and upgrader.
 
 Run from the extracted release directory (this file sits next to the runtime):
 
@@ -32,10 +32,10 @@ fast file watcher) and the Ayatana AppIndicator typelib (the tray icon).
   --no-deps          install nothing; rely on what is already on the machine
   --force            reinstall even if the same version is present
   --enable-autoupdate / --disable-autoupdate
-                     toggle the weekly `proton-drive-sync update` user timer
+                     toggle the weekly `phnx-drive-sync update` user timer
 
 The only manual step afterwards is signing in to Proton Drive:
-  proton-drive-sync login
+  phnx-drive-sync login
 EOF
 }
 
@@ -52,7 +52,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-APP="proton-drive-sync"
+APP="phnx-drive-sync"
 LIB="$HOME/.local/lib/$APP"
 BIN="$HOME/.local/bin"
 CONFIG_DIR="$HOME/.config/$APP"
@@ -72,7 +72,7 @@ die() {
 }
 
 [ -f "$SELF_DIR/VERSION" ] || die "install.sh: VERSION missing; run from the extracted release directory"
-[ -x "$SELF_DIR/proton-drive-sync-engine" ] || die "install.sh: proton-drive-sync-engine missing; run from the extracted release directory"
+[ -x "$SELF_DIR/phnx-drive-sync-engine" ] || die "install.sh: phnx-drive-sync-engine missing; run from the extracted release directory"
 [ -f "$SELF_DIR/LICENSE" ] || die "install.sh: LICENSE missing; run from the extracted release directory"
 [ -f "$SELF_DIR/THIRD_PARTY_NOTICES.md" ] || die "install.sh: THIRD_PARTY_NOTICES.md missing; run from the extracted release directory"
 NEW_VERSION="$(cat "$SELF_DIR/VERSION")"
@@ -407,20 +407,20 @@ mkdir -p "$BIN" "$CONFIG_DIR" "$UNIT_DIR" "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DI
 # stop the units before swapping the runtime: a restarted engine must never see
 # a half-copied libdir (its mount monitor could relaunch the sidecar mid-copy)
 if [ "$SYSTEMD_USER" -eq 1 ]; then
-    systemctl --user stop proton-drive-sync-tray.service proton-drive-sync.service 2>/dev/null || true
+    systemctl --user stop phnx-drive-sync-tray.service phnx-drive-sync.service 2>/dev/null || true
     # a tray launched via XDG autostart lives outside the unit's cgroup; stop it
     # too, or it keeps the single-instance lock and the freshly installed tray
     # exits. Match the exact installed script path (not a loose name) so an
     # unrelated shell whose arguments happen to contain the name is never hit.
     if command -v pkill >/dev/null 2>&1; then
-        pkill -f "$HOME/.local/lib/proton-drive-sync/tray/proton-drive-sync-tray.py" 2>/dev/null || true
+        pkill -f "$HOME/.local/lib/phnx-drive-sync/tray/phnx-drive-sync-tray.py" 2>/dev/null || true
     fi
 fi
 
 # app code only; user state lives under ~/.local/{share,state}/drive-sync and is never touched
 rm -rf "$LIB"
 mkdir -p "$LIB"
-cp -a "$SELF_DIR/proton-drive-sync-engine" "$LIB/"
+cp -a "$SELF_DIR/phnx-drive-sync-engine" "$LIB/"
 [ -f "$SELF_DIR/proton-drive" ] && cp -a "$SELF_DIR/proton-drive" "$LIB/"
 cp -a "$SELF_DIR/python" "$LIB/"
 cp -a "$SELF_DIR/tray" "$LIB/"
@@ -431,14 +431,14 @@ cp -a "$SELF_DIR/THIRD_PARTY_NOTICES.md" "$LIB/THIRD_PARTY_NOTICES.md"
 cp -a "$SELF_DIR/THIRD_PARTY_LICENSES.txt" "$LIB/THIRD_PARTY_LICENSES.txt" 2>/dev/null || true
 printf '%s\n' "$NEW_VERSION" > "$LIB/VERSION"
 
-install -m 0755 "$SELF_DIR/proton-drive-sync-engine" "$LIB/proton-drive-sync-engine"
-ln -sfn "$LIB/proton-drive-sync-engine" "$BIN/proton-drive-sync"
-install -m 0755 "$SELF_DIR/share/bin/proton-drive-sync-tray" "$BIN/proton-drive-sync-tray"
+install -m 0755 "$SELF_DIR/phnx-drive-sync-engine" "$LIB/phnx-drive-sync-engine"
+ln -sfn "$LIB/phnx-drive-sync-engine" "$BIN/phnx-drive-sync"
+install -m 0755 "$SELF_DIR/share/bin/phnx-drive-sync-tray" "$BIN/phnx-drive-sync-tray"
 
 # per-user env (never clobber an existing one)
 if [ ! -f "$CONFIG_DIR/env" ]; then
     cat > "$CONFIG_DIR/env" <<EOF
-# Proton Drive Sync environment (read by proton-drive-sync.service).
+# PHNX Drive Sync environment (read by phnx-drive-sync.service).
 # Defaults are baked into the engine; uncomment to override.
 PROTON_DRIVE_CACHE_DIR=$DATA_HOME/drive-sync/proton-cache
 PROTON_DRIVE_LOG_LEVEL=WARN
@@ -449,10 +449,10 @@ EOF
 fi
 
 # --- systemd units, autostart, icons, context menu ------------------------
-install -m 0644 "$SELF_DIR/share/systemd/user/proton-drive-sync.service" "$UNIT_DIR/"
-install -m 0644 "$SELF_DIR/share/systemd/user/proton-drive-sync-tray.service" "$UNIT_DIR/"
-install -m 0644 "$SELF_DIR/share/systemd/user/proton-drive-sync-update.service" "$UNIT_DIR/"
-install -m 0644 "$SELF_DIR/share/systemd/user/proton-drive-sync-update.timer" "$UNIT_DIR/"
+install -m 0644 "$SELF_DIR/share/systemd/user/phnx-drive-sync.service" "$UNIT_DIR/"
+install -m 0644 "$SELF_DIR/share/systemd/user/phnx-drive-sync-tray.service" "$UNIT_DIR/"
+install -m 0644 "$SELF_DIR/share/systemd/user/phnx-drive-sync-update.service" "$UNIT_DIR/"
+install -m 0644 "$SELF_DIR/share/systemd/user/phnx-drive-sync-update.timer" "$UNIT_DIR/"
 
 render() {
     # escape chars that are special in a sed replacement (& = match, | = delimiter)
@@ -460,11 +460,11 @@ render() {
     esc="$(printf '%s' "$HOME" | sed 's/[&|\\]/\\&/g')"
     sed "s|@HOME@|$esc|g" "$1" >"$2"
 }
-render "$SELF_DIR/share/autostart/proton-drive-sync-tray.desktop.in" "$AUTOSTART_DIR/proton-drive-sync-tray.desktop"
-render "$SELF_DIR/share/proton-drive-sync-restart.desktop.in" "$APPS_DIR/proton-drive-sync-restart.desktop"
-[ -d "$HOME/Desktop" ] && render "$SELF_DIR/share/proton-drive-sync-restart.desktop.in" "$HOME/Desktop/proton-drive-sync-restart.desktop" || true
+render "$SELF_DIR/share/autostart/phnx-drive-sync-tray.desktop.in" "$AUTOSTART_DIR/phnx-drive-sync-tray.desktop"
+render "$SELF_DIR/share/phnx-drive-sync-restart.desktop.in" "$APPS_DIR/phnx-drive-sync-restart.desktop"
+[ -d "$HOME/Desktop" ] && render "$SELF_DIR/share/phnx-drive-sync-restart.desktop.in" "$HOME/Desktop/phnx-drive-sync-restart.desktop" || true
 
-install -m 0644 "$SELF_DIR/assets/proton-drive-sync.svg" "$ICON_DIR/proton-drive-sync.svg"
+install -m 0644 "$SELF_DIR/assets/phnx-drive-sync.svg" "$ICON_DIR/phnx-drive-sync.svg"
 install -m 0755 "$SELF_DIR/share/nautilus-scripts/Proton Drive/Free up Space" "$NAUTILUS_DIR/"
 install -m 0755 "$SELF_DIR/share/nautilus-scripts/Proton Drive/Keep on This Device" "$NAUTILUS_DIR/"
 
@@ -479,21 +479,21 @@ rm -f "$BIN/drive-sync" "$BIN/drive-sync-tray" "$BIN/drive-sync-tray-wait" \
 # --- activate -------------------------------------------------------------
 if [ "$SYSTEMD_USER" -eq 1 ]; then
     systemctl --user daemon-reload
-    systemctl --user enable proton-drive-sync.service proton-drive-sync-tray.service >/dev/null 2>&1 || true
-    systemctl --user restart proton-drive-sync.service proton-drive-sync-tray.service ||
-        warn "could not (re)start the units; run: systemctl --user restart proton-drive-sync"
+    systemctl --user enable phnx-drive-sync.service phnx-drive-sync-tray.service >/dev/null 2>&1 || true
+    systemctl --user restart phnx-drive-sync.service phnx-drive-sync-tray.service ||
+        warn "could not (re)start the units; run: systemctl --user restart phnx-drive-sync"
     case "$AUTOUPDATE" in
-        enable) systemctl --user enable --now proton-drive-sync-update.timer >/dev/null 2>&1 || true ;;
-        disable) systemctl --user disable --now proton-drive-sync-update.timer >/dev/null 2>&1 || true ;;
+        enable) systemctl --user enable --now phnx-drive-sync-update.timer >/dev/null 2>&1 || true ;;
+        disable) systemctl --user disable --now phnx-drive-sync-update.timer >/dev/null 2>&1 || true ;;
     esac
 else
-    warn "No systemd user session detected; start the engine manually with: $BIN/proton-drive-sync run"
+    warn "No systemd user session detected; start the engine manually with: $BIN/phnx-drive-sync run"
 fi
 
 log ""
 log "$APP $NEW_VERSION installed."
 log "The only manual step is signing in to Proton Drive:"
-log "  $BIN/proton-drive-sync login"
+log "  $BIN/phnx-drive-sync login"
 log ""
-log "Status:  $BIN/proton-drive-sync status"
-log "Logs:    journalctl --user -u proton-drive-sync.service -f"
+log "Status:  $BIN/phnx-drive-sync status"
+log "Logs:    journalctl --user -u phnx-drive-sync.service -f"

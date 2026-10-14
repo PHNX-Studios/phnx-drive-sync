@@ -19,7 +19,7 @@ import { VERSION } from './version';
  */
 const DEFAULT_MANIFEST_URL =
     process.env.DRIVE_SYNC_RELEASE_URL ??
-    'https://github.com/proton-drive-sync/proton-drive-sync/releases/latest/download/latest.json';
+    'https://github.com/PHNX-Studios/phnx-drive-sync/releases/latest/download/latest.json';
 
 export interface ReleaseManifest {
     version: string;
@@ -109,7 +109,7 @@ function findInstaller(root: string): string | null {
 }
 
 /**
- * Entry point for `proton-drive-sync update`.
+ * Entry point for `phnx-drive-sync update`.
  * Exit codes: 0 up to date / installed, 1 failure, 2 no newer release with --check.
  */
 export async function runUpdate(args: string[]): Promise<number> {
@@ -126,7 +126,7 @@ export async function runUpdate(args: string[]): Promise<number> {
         manifestUrl = v;
     }
 
-    console.log(`proton-drive-sync ${VERSION}`);
+    console.log(`phnx-drive-sync ${VERSION}`);
 
     let manifest: ReleaseManifest;
     try {
@@ -163,7 +163,7 @@ export async function runUpdate(args: string[]): Promise<number> {
         return 1;
     }
 
-    const work = path.join(tmpdir(), `proton-drive-sync-update-${Date.now()}`);
+    const work = path.join(tmpdir(), `phnx-drive-sync-update-${Date.now()}`);
     mkdirSync(work, { recursive: true });
     const tarball = path.join(work, 'release.tar.gz');
     try {
