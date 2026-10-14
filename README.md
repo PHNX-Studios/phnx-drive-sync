@@ -1,5 +1,10 @@
 # PHNX Drive Sync
 
+[![CI](https://github.com/PHNX-Studios/phnx-drive-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/PHNX-Studios/phnx-drive-sync/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/PHNX-Studios/phnx-drive-sync)](https://github.com/PHNX-Studios/phnx-drive-sync/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue.svg)](#install)
+
 Bidirectional sync engine between `~/Proton Drive` and Proton Drive (`/my-files`),
 built directly on the official [Proton Drive SDK](https://github.com/ProtonDriveApps/sdk)
 (vendored in `vendor/`).
