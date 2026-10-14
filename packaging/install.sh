@@ -416,7 +416,7 @@ if [ "$SYSTEMD_USER" -eq 1 ]; then
     systemctl --user stop proton-drive-sync-tray.service proton-drive-sync.service \
         proton-drive-sync-update.timer proton-drive-sync-update.service 2>/dev/null || true
     systemctl --user disable proton-drive-sync.service proton-drive-sync-tray.service \
-        proton-drive-sync-update.timer 2>/dev/null || true
+        proton-drive-sync-update.service proton-drive-sync-update.timer 2>/dev/null || true
     # a tray launched via XDG autostart lives outside the unit's cgroup; stop it
     # too, or it keeps the single-instance lock and the freshly installed tray
     # exits. Match the exact installed script path (escaped, not a loose name)
