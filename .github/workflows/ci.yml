@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Type-check and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      # Runtime dependencies live in vendor/cli; the repo-root node_modules is a
+      # committed symlink into it, which is what the documented dev commands use.
+      - name: Install vendored dependencies
+        run: cd vendor/cli && bun install --frozen-lockfile
+
+      - name: Type-check (strict)
+        run: ./node_modules/.bin/tsc -p tsconfig.json
+
+      # Scoped to test/: a bare `bun test` would also walk the ~930 vendored SDK tests.
+      - name: Unit tests
+        run: bun test test/
+
+  build:
+    name: Build release tarball
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Build portable tarball
+        run: bash packaging/build.sh
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proton-drive-sync-tarball
+          path: |
+            dist/*.tar.gz
+            dist/latest.json
+          if-no-files-found: error

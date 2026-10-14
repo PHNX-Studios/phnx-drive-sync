@@ -4,10 +4,22 @@ Bidirectional sync engine between `~/Proton Drive` and Proton Drive (`/my-files`
 built directly on the official [Proton Drive SDK](https://github.com/ProtonDriveApps/sdk)
 (vendored in `vendor/`).
 
+> **Unofficial third-party application.** Proton Drive Sync is an independent
+> project. It is **not** affiliated with, endorsed by, or supported by Proton AG.
+> "Proton" and "Proton Drive" are trademarks of Proton AG, used here only to
+> describe interoperability. Proton requires third-party clients to identify
+> themselves honestly and not masquerade as first-party software; this
+> application sends an `x-pm-appversion` header of the form
+> `external-drive-syncengine@<version>` and talks only to official endpoints.
+
 Requires: [bun](https://bun.sh) and an authenticated session via the official
 `proton-drive` CLI (`proton-drive` re-login if the session expires).
 
 ## Install
+
+> **Pre-release.** No release tarballs are published yet. Until the first
+> release is uploaded, build one locally with `bash packaging/build.sh` and run
+> the resulting `dist/proton-drive-sync-<version>-linux-<arch>.tar.gz` installer.
 
 Download the release tarball for your architecture, then run its installer. It
 is self-contained: the engine and the official login CLI are compiled to single
@@ -334,3 +346,24 @@ The release version comes from the root `package.json`.
   baseline table is untouched until a real pass executes.
 - Directory renames propagate as mkdir + child renames + trash cascade.
 - Empty directories are synced (Proton supports them).
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development setup and pull-request checklist, and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations. For
+security issues, follow [SECURITY.md](SECURITY.md) and report privately.
+
+## License
+
+This project is licensed under the MIT License. Copyright (c) 2026 PHNX Studios.
+See [LICENSE](LICENSE).
+
+It bundles the official Proton Drive SDK (developed by Proton AG, MIT) and the
+Bun runtime, and embeds the JavaScript dependencies of both into the compiled
+binaries. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full
+attribution and for the operational rules that apply to third-party clients of
+Proton's hosted services.
+
+Proton Drive Sync is an independent, unofficial application and is not
+affiliated with or supported by Proton AG.

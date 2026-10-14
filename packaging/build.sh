@@ -94,6 +94,8 @@ cp -a "tray/nautilus-scripts/Proton Drive/." "$STAGE/share/nautilus-scripts/Prot
 
 cp -a packaging/install.sh "$STAGE/install.sh"
 cp -a README.md "$STAGE/README.md"
+# license + third-party attributions must travel with every distributed copy
+cp -a LICENSE THIRD_PARTY_NOTICES.md "$STAGE/"
 chmod +x "$STAGE/install.sh" "$STAGE/proton-drive-sync-engine"
 [ -x "$STAGE/proton-drive" ] && chmod +x "$STAGE/proton-drive"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"

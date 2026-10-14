@@ -73,6 +73,8 @@ die() {
 
 [ -f "$SELF_DIR/VERSION" ] || die "install.sh: VERSION missing; run from the extracted release directory"
 [ -x "$SELF_DIR/proton-drive-sync-engine" ] || die "install.sh: proton-drive-sync-engine missing; run from the extracted release directory"
+[ -f "$SELF_DIR/LICENSE" ] || die "install.sh: LICENSE missing; run from the extracted release directory"
+[ -f "$SELF_DIR/THIRD_PARTY_NOTICES.md" ] || die "install.sh: THIRD_PARTY_NOTICES.md missing; run from the extracted release directory"
 NEW_VERSION="$(cat "$SELF_DIR/VERSION")"
 
 # --- version guard (no-op on equal, refuse downgrade) --------------------
@@ -424,6 +426,8 @@ cp -a "$SELF_DIR/python" "$LIB/"
 cp -a "$SELF_DIR/tray" "$LIB/"
 cp -a "$SELF_DIR/assets" "$LIB/"
 cp -a "$SELF_DIR/README.md" "$LIB/README.md" 2>/dev/null || true
+cp -a "$SELF_DIR/LICENSE" "$LIB/LICENSE"
+cp -a "$SELF_DIR/THIRD_PARTY_NOTICES.md" "$LIB/THIRD_PARTY_NOTICES.md"
 printf '%s\n' "$NEW_VERSION" > "$LIB/VERSION"
 
 install -m 0755 "$SELF_DIR/proton-drive-sync-engine" "$LIB/proton-drive-sync-engine"

@@ -689,6 +689,12 @@ function usage(): string {
 
 /** Sign in via the bundled official CLI (or a system `proton-drive` fallback). */
 function login(): number {
+    // Proton requires a clear third-party disclosure when prompting for account
+    // details (see vendor/README.md, "Product and legal requirements").
+    console.error(
+        'Proton Drive Sync is an independent, unofficial application.\n' +
+            'This is a third-party application not officially supported by Proton.',
+    );
     const bundled = path.join(appRoot, 'proton-drive');
     const bin = existsSync(bundled) ? bundled : 'proton-drive';
     const r = spawnSync(bin, ['auth', 'login', ...process.argv.slice(3)], { stdio: 'inherit' });
