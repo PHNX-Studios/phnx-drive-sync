@@ -15,7 +15,11 @@ binaries (Bun runtime + all dependencies embedded, glibc 2.17+), and the
 installer wires up systemd user units, autostart, icons and the Nautilus
 context menu. Everything lands under `~/.local`; the only elevated step is
 installing a small set of host packages (fuse3, python3, GTK/AppIndicator,
-inotify-tools, gvfs, libnotify, gnome-keyring) via your package manager.
+inotify-tools, gvfs, libnotify, gnome-keyring) via your package manager. When it
+cannot elevate (no sudo, an unknown distro, or `--no-system-deps`), the two host
+pieces that matter most are fetched into `~/.local` without root: `inotify-tools`
+(the fast file watcher) and the Ayatana AppIndicator typelib (the tray icon).
+Everything else degrades gracefully on its own.
 
 ```sh
 tar xzf proton-drive-sync-<version>-linux-<arch>.tar.gz
@@ -24,8 +28,8 @@ cd proton-drive-sync-<version>-linux-<arch>
 proton-drive-sync login      # the only manual step: sign in to Proton Drive
 ```
 
-Installer flags: `--no-system-deps` (skip the package-manager step; the engine
-still runs and degrades files-on-demand/tray when pieces are missing),
+Installer flags: `--no-system-deps` (skip the elevated package-manager step; the
+user-level fallback still runs), `--no-deps` (install no dependencies at all),
 `--enable-autoupdate` / `--disable-autoupdate` (weekly `proton-drive-sync update`
 via a systemd user timer), and `--force` (reinstall the same version).
 

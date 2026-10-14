@@ -12,4 +12,10 @@ if [ -d "$HOME/.local/lib/girepository-1.0" ]; then
     GI_TYPELIB_PATH="$HOME/.local/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
     export GI_TYPELIB_PATH
 fi
+# a user-level AppIndicator implementation library (fetched by install.sh when
+# the system package is unavailable) is found through LD_LIBRARY_PATH
+if [ -e "$HOME/.local/lib/libayatana-appindicator3.so.1" ] || [ -e "$HOME/.local/lib/libappindicator3.so.1" ]; then
+    LD_LIBRARY_PATH="$HOME/.local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH
+fi
 exec "$PY" "$HOME/.local/lib/proton-drive-sync/tray/proton-drive-sync-tray.py"

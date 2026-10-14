@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
 # Proton Drive Sync - portable installer and upgrader.
 #
-# Run from the extracted release directory (this file sits next to the runtime):
-#
-#   ./install.sh [--force] [--no-system-deps] [--enable-autoupdate|--disable-autoupdate]
-#
-# Everything installs under $HOME. The only elevated step is installing a small
-# set of host packages (fuse3, python3, GTK/AppIndicator, ...) with the system
-# package manager; skip it with --no-system-deps and the engine still runs
-# (degrading files-on-demand and/or the tray when those pieces are absent).
-#
-# The only manual step afterwards is signing in to Proton Drive:
-#   proton-drive-sync login
+# Run from the extracted release directory (this file sits next to the runtime).
 
 set -euo pipefail
 
@@ -19,16 +9,41 @@ SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 FORCE=0
 INSTALL_SYSDEPS=1
+INSTALL_USERDEPS=1
 AUTOUPDATE=""
 
 print_help() {
-    sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    cat <<'EOF'
+Proton Drive Sync - portable installer and upgrader.
+
+Run from the extracted release directory (this file sits next to the runtime):
+
+  ./install.sh [--force] [--no-system-deps] [--no-deps]
+               [--enable-autoupdate|--disable-autoupdate]
+
+Everything installs under $HOME. Host packages (fuse3, python3, GTK/AppIndicator,
+inotify-tools, gvfs, libnotify, gnome-keyring) are installed with the system
+package manager when it is available and can be elevated. When it cannot (no
+sudo, unknown distro, no network privileges) the two small user-level pieces
+that matter most are fetched into ~/.local without root: inotify-tools (the
+fast file watcher) and the Ayatana AppIndicator typelib (the tray icon).
+
+  --no-system-deps   skip the elevated package-manager step (user-level fallback still runs)
+  --no-deps          install nothing; rely on what is already on the machine
+  --force            reinstall even if the same version is present
+  --enable-autoupdate / --disable-autoupdate
+                     toggle the weekly `proton-drive-sync update` user timer
+
+The only manual step afterwards is signing in to Proton Drive:
+  proton-drive-sync login
+EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --force) FORCE=1 ;;
         --no-system-deps) INSTALL_SYSDEPS=0 ;;
+        --no-deps) INSTALL_SYSDEPS=0; INSTALL_USERDEPS=0 ;;
         --enable-autoupdate) AUTOUPDATE=enable ;;
         --disable-autoupdate) AUTOUPDATE=disable ;;
         --help | -h) print_help; exit 0 ;;
@@ -99,26 +114,36 @@ case "$PKG_FAM" in
         CORE_PKGS="fuse3 python3 python3-gi inotify-tools libglib2.0-bin gvfs libnotify-bin gnome-keyring"
         APPIND_CANDIDATES="gir1.2-ayatanaappindicator3-0.1 gir1.2-appindicator3-0.1 libayatana-appindicator3-1"
         PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
+        INOTIFY_PKGS="inotify-tools libinotifytools0"
+        APPIND_PKGS="gir1.2-ayatanaappindicator3-0.1 libayatana-appindicator3-1 gir1.2-appindicator3-0.1 libappindicator3-1"
         ;;
     rpm)
         CORE_PKGS="fuse3 python3 python3-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
         APPIND_CANDIDATES="libayatana-appindicator-gtk3 typelib(AyatanaAppIndicator3)"
         PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
+        INOTIFY_PKGS="inotify-tools inotify-tools-libs"
+        APPIND_PKGS="libayatana-appindicator-gtk3 libappindicator-gtk3"
         ;;
     suse)
         CORE_PKGS="fuse3 python3 python3-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
         APPIND_CANDIDATES="libayatana-appindicator3-1 typelib(AyatanaAppIndicator3)"
         PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
+        INOTIFY_PKGS="inotify-tools libinotifytools0"
+        APPIND_PKGS="libayatana-appindicator3-1"
         ;;
     arch)
         CORE_PKGS="fuse3 python python-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
         APPIND_CANDIDATES="libayatana-appindicator"
         PY_PKGS="python-pyfuse3 python-trio python-cffi"
+        INOTIFY_PKGS="inotify-tools"
+        APPIND_PKGS="libayatana-appindicator"
         ;;
     *)
         CORE_PKGS=""
         APPIND_CANDIDATES=""
         PY_PKGS=""
+        INOTIFY_PKGS=""
+        APPIND_PKGS=""
         ;;
 esac
 
@@ -169,6 +194,127 @@ if [ "$INSTALL_SYSDEPS" -eq 1 ]; then
         for p in $APPIND_CANDIDATES; do pkg_try "$p"; done
         for p in $PY_PKGS; do pkg_try "$p"; done
     fi
+fi
+
+# --- user-level fallback for host tools we could not install system-wide ---
+# Downloading a distro package and unpacking it into ~/.local needs no root.
+# The service unit searches ~/.local/bin (PATH) and ~/.local/lib
+# (LD_LIBRARY_PATH); the tray launcher searches ~/.local/lib/girepository-1.0.
+# Only the two pieces a missing system package would otherwise cost the user
+# (the fast watcher and the tray icon) are fetched; the rest degrades on its own.
+
+user_download_pkg() {
+    # $1 = package name, $2 = destination directory (no root required)
+    local pkg="$1" dir="$2"
+    case "$PKG_MGR" in
+        apt-get) ( cd "$dir" && apt-get download "$pkg" ) >/dev/null 2>&1 ;;
+        dnf) command -v dnf >/dev/null 2>&1 && dnf download --destdir "$dir" "$pkg" >/dev/null 2>&1 ;;
+        yum) command -v yumdownloader >/dev/null 2>&1 && yumdownloader --destdir "$dir" "$pkg" >/dev/null 2>&1 ;;
+        zypper) zypper --pkg-cache-dir "$dir" --non-interactive install --download-only "$pkg" >/dev/null 2>&1 ;;
+        pacman) pacman -Sw --noconfirm --cachedir "$dir" "$pkg" >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+user_extract_pkg() {
+    # $1 = package archive, $2 = extraction root
+    local file="$1" dir="$2"
+    mkdir -p "$dir"
+    case "$file" in
+        *.deb)
+            command -v dpkg-deb >/dev/null 2>&1 || return 1
+            dpkg-deb -x "$file" "$dir" >/dev/null 2>&1 ;;
+        *.rpm)
+            command -v rpm2cpio >/dev/null 2>&1 || return 1
+            command -v cpio >/dev/null 2>&1 || return 1
+            ( cd "$dir" && rpm2cpio "$file" | cpio -idm --quiet ) >/dev/null 2>&1 ;;
+        *.pkg.tar.*)
+            command -v bsdtar >/dev/null 2>&1 || return 1
+            ( cd "$dir" && bsdtar -xf "$file" ) >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+user_have_inotifywait() {
+    if command -v inotifywait >/dev/null 2>&1; then return 0; fi
+    if [ -x "$HOME/.local/bin/inotifywait" ]; then return 0; fi
+    return 1
+}
+
+user_install_inotifytools() {
+    if user_have_inotifywait; then return 0; fi
+    [ -n "$INOTIFY_PKGS" ] || return 0
+    log "  fetching inotify-tools into ~/.local (system package unavailable)"
+    mkdir -p "$HOME/.local/bin" "$HOME/.local/lib"
+    local pkg dir file got=0
+    for pkg in $INOTIFY_PKGS; do
+        dir="$(mktemp -d)" || continue
+        if user_download_pkg "$pkg" "$dir"; then
+            file="$(find "$dir" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -print -quit 2>/dev/null)"
+            if [ -n "$file" ] && user_extract_pkg "$file" "$dir/x"; then
+                find "$dir/x" -type f -name 'inotifywait' -exec install -m 0755 {} "$HOME/.local/bin/" \; 2>/dev/null || true
+                find "$dir/x" -name 'libinotifytools.so*' -exec cp -a {} "$HOME/.local/lib/" \; 2>/dev/null || true
+                if [ -x "$HOME/.local/bin/inotifywait" ]; then got=1; fi
+            fi
+        fi
+        rm -rf "$dir"
+    done
+    if [ "$got" -ne 1 ]; then
+        warn "  could not fetch inotify-tools; install it for fast change detection (the slow safety poll is used otherwise)."
+        return 0
+    fi
+    if LD_LIBRARY_PATH="$HOME/.local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ldd "$HOME/.local/bin/inotifywait" 2>/dev/null | grep -q 'not found'; then
+        warn "  fetched inotifywait has unresolved libraries; fast change detection may be unavailable."
+    else
+        log "  installed ~/.local/bin/inotifywait"
+    fi
+}
+
+user_have_appindicator() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    GI_TYPELIB_PATH="$HOME/.local/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}" \
+        python3 -c 'import gi
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3
+except Exception:
+    gi.require_version("AppIndicator3", "0.1")
+    from gi.repository import AppIndicator3' >/dev/null 2>&1
+}
+
+user_install_appindicator() {
+    if user_have_appindicator; then return 0; fi
+    [ -n "$APPIND_PKGS" ] || return 0
+    log "  fetching the AppIndicator typelib into ~/.local (system package unavailable)"
+    mkdir -p "$HOME/.local/lib/girepository-1.0" "$HOME/.local/lib"
+    local pkg dir file got=0
+    for pkg in $APPIND_PKGS; do
+        dir="$(mktemp -d)" || continue
+        if user_download_pkg "$pkg" "$dir"; then
+            file="$(find "$dir" -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.*' \) -print -quit 2>/dev/null)"
+            if [ -n "$file" ] && user_extract_pkg "$file" "$dir/x"; then
+                find "$dir/x" -name '*.typelib' -exec cp -a {} "$HOME/.local/lib/girepository-1.0/" \; 2>/dev/null || true
+                find "$dir/x" -name 'libayatana-appindicator3.so*' -exec cp -a {} "$HOME/.local/lib/" \; 2>/dev/null || true
+                find "$dir/x" -name 'libappindicator3.so*' -exec cp -a {} "$HOME/.local/lib/" \; 2>/dev/null || true
+                got=1
+            fi
+        fi
+        rm -rf "$dir"
+    done
+    if [ "$got" -ne 1 ]; then
+        warn "  could not fetch the AppIndicator typelib; the tray icon will be unavailable."
+        return 0
+    fi
+    if user_have_appindicator; then
+        log "  installed the AppIndicator typelib in ~/.local"
+    else
+        warn "  fetched AppIndicator files but the typelib still does not load; the tray may be unavailable."
+    fi
+}
+
+if [ "$INSTALL_USERDEPS" -eq 1 ] && [ "$PKG_FAM" != unknown ]; then
+    user_install_inotifytools
+    user_install_appindicator
 fi
 
 # --- Python sidecar deps fallback (files-on-demand) ----------------------
