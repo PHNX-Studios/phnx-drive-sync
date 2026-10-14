@@ -54,7 +54,7 @@ jobs:
         run: bash packaging/build.sh
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: phnx-drive-sync-tarball
           path: |
