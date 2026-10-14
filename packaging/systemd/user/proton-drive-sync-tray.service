@@ -11,13 +11,13 @@ Environment=PATH=/usr/bin:/bin:/usr/local/bin
 Environment=HOME=%h
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
-Environment=WAYLAND_DISPLAY=wayland-0
-Environment=DISPLAY=:0
-Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME
-Environment=GI_TYPELIB_PATH=%h/.local/lib/girepository-1.0
 Environment=PYTHONUNBUFFERED=1
 Environment=NO_AT_BRIDGE=1
-ExecStart=/usr/bin/python3 %h/.local/lib/proton-drive-sync/tray/proton-drive-sync-tray.py
+# DISPLAY/WAYLAND_DISPLAY are intentionally NOT set here: hardcoding them
+# overrides the real graphical session and breaks non-:0 / pure-Wayland setups.
+# The user manager imports the session environment; the XDG autostart entry is
+# the primary tray launcher regardless.
+ExecStart=%h/.local/bin/proton-drive-sync-tray
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=10

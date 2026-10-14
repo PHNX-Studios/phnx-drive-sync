@@ -6,18 +6,27 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# runtime code lives on the internal disk (~/.local/lib/proton-drive-sync, installed
-# by packaging/install.sh) so login start never waits for the external SSD
-ExecStart=%h/.local/lib/proton-drive-sync/proton-drive-sync.sh run
+# self-contained compiled binary (installed by packaging/install.sh); no bun,
+# sources or node_modules are needed at runtime
+ExecStart=%h/.local/lib/proton-drive-sync/proton-drive-sync-engine run
+# optional per-user overrides (DRIVE_SYNC_*, PROTON_DRIVE_*); created by install.sh
+EnvironmentFile=-%h/.config/proton-drive-sync/env
+# find user-installed helpers (e.g. a user-local inotifywait in ~/.local/bin,
+# which may itself need ~/.local/lib); system-installed tools work regardless
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=LD_LIBRARY_PATH=%h/.local/lib
 # belt & braces: never leave a FUSE session mounted if the engine dies hard
-ExecStopPost=-/usr/bin/fusermount3 -u "%h/Proton Drive"
+ExecStopPost=-/usr/bin/env fusermount3 -u "%h/Proton Drive"
 # one full remote walk runs at startup; afterwards the inotify watcher and the
 # SDK event stream drive incremental passes (Sync now on demand via SIGUSR1).
 # If the watcher is unavailable the engine falls back to a low-frequency safety
 # poll, so the unit deliberately does not gate on inotifywait being installed.
 Restart=on-failure
 RestartSec=10
-TimeoutStopSec=15
+# allow the in-flight file operation to finish before the process exits; keep
+# this above DRIVE_SYNC_SHUTDOWN_GRACE_MS (default 120000) so the graceful path
+# wins instead of systemd's SIGKILL
+TimeoutStopSec=150
 KillSignal=SIGTERM
 
 [Install]

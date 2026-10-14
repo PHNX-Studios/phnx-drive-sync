@@ -1,7 +1,15 @@
 #!/bin/sh
-# XDG autostart + manual launcher for the tray icon (installed runtime copy).
-export GI_TYPELIB_PATH="$HOME/.local/lib/girepository-1.0"
-export PYTHONUNBUFFERED=1
-export NO_AT_BRIDGE=1
-export XDG_CURRENT_DESKTOP=ubuntu:GNOME
-exec /usr/bin/python3 "$HOME/.local/lib/proton-drive-sync/tray/proton-drive-sync-tray.py"
+# Launcher for the Proton Drive Sync tray icon (installed runtime copy).
+# The AppIndicator typelib is provided by the distro package install.sh pulls in.
+PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null)"
+if [ -z "$PY" ]; then
+    echo "proton-drive-sync-tray: python3 not found" >&2
+    exit 1
+fi
+# a user-local AppIndicator typelib (~/.local/lib/girepository-1.0) is used when
+# present (distros that lack the gir package); the system typelib is used otherwise
+if [ -d "$HOME/.local/lib/girepository-1.0" ]; then
+    GI_TYPELIB_PATH="$HOME/.local/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+    export GI_TYPELIB_PATH
+fi
+exec "$PY" "$HOME/.local/lib/proton-drive-sync/tray/proton-drive-sync-tray.py"

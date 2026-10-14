@@ -1,16 +1,21 @@
+import { spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import path from 'node:path';
 
-import { lockFile, localRoot, prefetchDefault, shareDir, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
+import { appRoot } from './approot';
+import { lockFile, localRoot, prefetchDefault, shareDir, shutdownGraceMs, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
 import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
 import { log, setStatus, status } from './log';
-import { isMountPoint, monitorMount, startMount, stopMount } from './mount';
+import { isMountPoint, monitorMount, mountOkPath, startMount, stopMount } from './mount';
 import * as remote from './remote';
 import { rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc';
+import { waitForPassEnd } from './shutdown';
 import * as st from './state';
-import { fileEq, runPass, steady } from './sync';
+import { fileEq, requestStop, runPass, steady } from './sync';
+import { runUpdate } from './update';
+import { VERSION } from './version';
 import { startWatcher } from './watcher';
 
 let lockHeld = false;
@@ -68,6 +73,19 @@ function releaseLock(): void {
 async function main(): Promise<void> {
     const mode = process.argv[2] ?? 'run';
 
+    // The old wrapper script used to supply these; bake the same defaults in so
+    // the compiled binary behaves identically under systemd and from a shell.
+    process.env.PROTON_DRIVE_CACHE_DIR ??= path.join(shareDir, 'proton-cache');
+    process.env.PROTON_DRIVE_LOG_LEVEL ??= 'WARN';
+
+    if (mode === 'help' || mode === '--help' || mode === '-h') {
+        console.log(usage());
+        return;
+    }
+    if (mode === 'version' || mode === '--version' || mode === '-V') {
+        console.log(VERSION);
+        return;
+    }
     if (mode === 'status') {
         try {
             console.log(readFileSync(statusFile, 'utf8'));
@@ -81,9 +99,21 @@ async function main(): Promise<void> {
         process.exitCode = await rpcClient(mode, process.argv.slice(3));
         return;
     }
+    if (mode === 'login') {
+        process.exitCode = login();
+        return;
+    }
+    if (mode === 'restart') {
+        process.exitCode = await restartEngine();
+        return;
+    }
+    if (mode === 'update') {
+        process.exitCode = await runUpdate(process.argv.slice(3));
+        return;
+    }
     const dryRun = process.argv.includes('--dry-run');
     if (mode !== 'run' && mode !== 'once') {
-        console.error('usage: drive-sync [run|once [--dry-run]|status|pin <path>...|unpin <path>...|evict [path...]|prefetch on|off|status]');
+        console.error(usage());
         process.exitCode = 64;
         return;
     }
@@ -387,8 +417,49 @@ async function daemon(): Promise<void> {
     let passing = false;
     let pending = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let watch: ReturnType<typeof startWatcher> | null = null;
+    let eventsStarted = false;
+    let rpcStarted = false;
     let timerArmedAt = 0;
     let lastPassStartedAt = 0;
+
+    // --- graceful shutdown: finish the in-flight file, then unwind ----------
+    // Handlers are registered before the mount and initial pass so a SIGTERM at
+    // login also drains instead of hard-killing the process mid-upload.
+    let shutdownResolve: () => void = () => {};
+    const shutdownDone = new Promise<void>((resolve) => {
+        shutdownResolve = resolve;
+    });
+    let draining = false;
+    const drainAndStop = async (): Promise<void> => {
+        if (draining) return;
+        draining = true;
+        // runPass checks requestStop() between actions, so the file operation
+        // already running finishes before the pass unwinds; this just waits for it.
+        const grace = shutdownGraceMs();
+        if (passing) log('INFO', `finishing the in-flight operation before shutdown (up to ${Math.round(grace / 1000)}s)`);
+        const drained = await waitForPassEnd({ isPassing: () => passing, graceMs: grace, sleep: (ms) => remote.sleep(ms) });
+        if (!drained) log('WARN', 'shutdown grace elapsed with a pass still running; unmounting and exiting anyway');
+        await stopMount();
+        setStatus({ state: 'stopped' });
+        setTimeout(shutdownResolve, 500);
+    };
+    const shutdown = (sig: string): void => {
+        if (stopping) return;
+        stopping = true;
+        syncNowHook = null;
+        log('INFO', `${sig} received; shutting down`);
+        if (timer) clearTimeout(timer);
+        if (pollTimer) clearInterval(pollTimer);
+        if (watch) watch.stop();
+        if (eventsStarted) remote.stopEventLoop();
+        if (rpcStarted) stopRpcServer();
+        requestStop();
+        void drainAndStop();
+    };
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
 
     /**
      * Debounce a sync pass. Non-sliding callers coalesce (the first event wins);
@@ -450,6 +521,12 @@ async function daemon(): Promise<void> {
     if (!mounted.ok) log('ERROR', 'mount degraded: users see an empty folder until the mount comes up');
     monitorMount();
 
+    // shutdown requested while bringing the mount up: skip the initial walk
+    if (stopping) {
+        await shutdownDone;
+        return;
+    }
+
     log('INFO', 'initial full pass...');
     passing = true;
     lastPassStartedAt = Date.now();
@@ -460,6 +537,13 @@ async function daemon(): Promise<void> {
     } finally {
         passing = false;
     }
+
+    // shutdown requested during the initial pass: do not start the pumps
+    if (stopping) {
+        await shutdownDone;
+        return;
+    }
+
     setStatus({ state: 'running', prefetch: prefetchEffective() });
     maybeAutoEvict(new Set(hydrating.keys()));
     kickEmblems();
@@ -551,6 +635,7 @@ async function daemon(): Promise<void> {
             return [{ path: p, ok: true, note: 'trashed' }];
         },
     });
+    rpcStarted = true;
 
     syncNowHook = () => {
         if (stopping) return;
@@ -558,13 +643,14 @@ async function daemon(): Promise<void> {
         schedule(0);
     };
     remote.startEventLoop(() => schedule(1000));
-    const watch = startWatcher(() => schedule(watcherDebounceMs, true));
+    eventsStarted = true;
+    watch = startWatcher(() => schedule(watcherDebounceMs, true));
     // Safety net: the watcher is a fast path, not a guarantee. If it is missing,
     // permanently crashed, or reports partial coverage (inotify watch limit), fall
     // back to a low-frequency incremental pass so local edits still sync. While the
     // watcher is healthy the poll stays silent (no periodic full walk).
     const pollMs = watcherPollMs();
-    const pollTimer =
+    pollTimer =
         pollMs > 0
             ? setInterval(() => {
                   if (stopping) return;
@@ -578,30 +664,84 @@ async function daemon(): Promise<void> {
             : null;
     if (pollTimer) pollTimer.unref();
 
-    await new Promise<void>((resolve) => {
-        const shutdown = (sig: string): void => {
-            if (stopping) return;
-            stopping = true;
-            syncNowHook = null;
-            log('INFO', `${sig} received; shutting down`);
-            if (timer) clearTimeout(timer);
-            if (pollTimer) clearInterval(pollTimer);
-            watch.stop();
-            remote.stopEventLoop();
-            stopRpcServer();
-            void stopMount().then(() => {
-                setStatus({ state: 'stopped' });
-                setTimeout(resolve, 500);
-            });
-        };
-        process.on('SIGINT', () => shutdown('SIGINT'));
-        process.on('SIGTERM', () => shutdown('SIGTERM'));
-    });
+    await shutdownDone;
     log('INFO', 'stopped cleanly');
 }
 
-main().catch((e) => {
-    log('ERROR', `fatal: ${e instanceof Error ? e.stack : String(e)}`);
-    releaseLock();
-    process.exitCode = 1;
-});
+function usage(): string {
+    return [
+        'usage: proton-drive-sync <command> [options]',
+        '',
+        'commands:',
+        '  run                        daemon: initial full pass, then events + watcher (default)',
+        '  once [--dry-run]           single full pass (exit 0 ok, 2 errors, 3 auth)',
+        '  status                     print status.json',
+        '  pin <path>...              download online-only files and keep them on this device',
+        '  unpin <path>...            free local space (files stay on Proton Drive)',
+        '  evict [path...]            bulk "free up space" (no paths = every local file)',
+        '  prefetch on|off|status     recall-on-hover toggle (default off)',
+        '  login                      sign in to Proton Drive (the only manual setup step)',
+        '  restart                    restart the engine service and wait for the FUSE mount',
+        '  update [--check] [--url U] check for and install a newer release',
+        '  version                    print the version',
+    ].join('\n');
+}
+
+/** Sign in via the bundled official CLI (or a system `proton-drive` fallback). */
+function login(): number {
+    const bundled = path.join(appRoot, 'proton-drive');
+    const bin = existsSync(bundled) ? bundled : 'proton-drive';
+    const r = spawnSync(bin, ['auth', 'login', ...process.argv.slice(3)], { stdio: 'inherit' });
+    if (r.error) {
+        if ((r.error as NodeJS.ErrnoException).code === 'ENOENT') {
+            console.error(
+                'proton-drive CLI not found. Reinstall proton-drive-sync, or install the official\n' +
+                    'proton-drive CLI and run: proton-drive auth login',
+            );
+            return 127;
+        }
+        console.error(`login failed: ${r.error.message}`);
+        return 1;
+    }
+    return r.status ?? 1;
+}
+
+/**
+ * `proton-drive-sync restart`: restart the engine unit and report success only
+ * once the FUSE sidecar heartbeat is beating again. Used by the desktop
+ * launcher; the tray heals a degraded mount on its own.
+ */
+async function restartEngine(): Promise<number> {
+    const r = spawnSync('systemctl', ['--user', 'restart', 'proton-drive-sync.service'], { stdio: 'inherit' });
+    if (r.error || r.status !== 0) {
+        notify('Engine restart failed - check: systemctl --user status proton-drive-sync');
+        return 1;
+    }
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+        try {
+            if (Date.now() - statSync(mountOkPath).mtimeMs <= 15_000) {
+                notify('Engine restarted - Proton Drive mounted');
+                return 0;
+            }
+        } catch {
+            /* sidecar is not beating yet */
+        }
+        if (spawnSync('systemctl', ['--user', 'is-active', '--quiet', 'proton-drive-sync.service']).status !== 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    notify('Engine restarted, but the FUSE mount did not come up - check: journalctl --user -u proton-drive-sync.service');
+    return 1;
+}
+
+main()
+    .then(() => {
+        // `fetch` (self-update) and other async resources can keep the event loop
+        // alive after the command is done; exit deterministically.
+        process.exit(process.exitCode ?? 0);
+    })
+    .catch((e) => {
+        log('ERROR', `fatal: ${e instanceof Error ? e.stack : String(e)}`);
+        releaseLock();
+        process.exit(1);
+    });

@@ -33,6 +33,20 @@ export interface PassStats {
 const totals = { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0 };
 let passCount = 0;
 
+/**
+ * Cooperative shutdown. Set by the daemon on SIGTERM/SIGINT; `execute` checks it
+ * between actions so the file operation already in flight runs to completion
+ * before the pass unwinds (no half-written downloads - those use a `.part` temp
+ * file - and no upload draft orphaned mid-revision). The flag is process
+ * lifetime: `run` is terminal, and no new pass is scheduled once stopping.
+ */
+let stopRequested = false;
+
+/** Ask the running pass to stop after the current file operation completes. */
+export function requestStop(): void {
+    stopRequested = true;
+}
+
 function parentRel(p: string): string {
     const i = p.lastIndexOf('/');
     return i === -1 ? '' : p.slice(0, i);
@@ -436,10 +450,19 @@ function describeAction(a: Action): string {
     }
 }
 
-async function execute(
+/**
+ * Run the classified actions in phase order, one file operation at a time.
+ *
+ * `shouldStop` is consulted BEFORE each action (defaults to the module-level
+ * cooperative stop flag `requestStop()`), so when a shutdown is requested the
+ * operation already in flight runs to completion and no further action starts.
+ * Exposed (with the injected predicate) so the stop boundary is unit-testable.
+ */
+export async function execute(
     actions: Action[],
     R: Map<string, st.CacheRow>,
     s: PassStats,
+    shouldStop: () => boolean = () => stopRequested,
 ): Promise<void> {
     const trashedDirs: string[] = [];
     const ordered = sortActions(actions);
@@ -455,6 +478,12 @@ async function execute(
         setStatus({ progress: { current: describeAction(a), done, total } });
     };
     for (const a of ordered) {
+        // Cooperative shutdown: never start a new file operation once stopping,
+        // so the one already in flight is the last one to run.
+        if (shouldStop()) {
+            log('INFO', `shutdown requested; stopping after the in-flight operation (${done}/${total} done)`);
+            break;
+        }
         done++;
         report(a);
         try {

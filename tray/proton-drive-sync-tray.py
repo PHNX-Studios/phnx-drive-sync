@@ -12,15 +12,17 @@ import time
 from datetime import datetime, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_LOCAL_TYPELIB = os.path.expanduser("~/.local/lib/girepository-1.0")
-if os.path.isdir(_LOCAL_TYPELIB):
-    os.environ["GI_TYPELIB_PATH"] = _LOCAL_TYPELIB + os.pathsep + os.environ.get("GI_TYPELIB_PATH", "")
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-gi.require_version("AyatanaAppIndicator3", "0.1")
-from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+try:
+    gi.require_version("AyatanaAppIndicator3", "0.1")
+    from gi.repository import AyatanaAppIndicator3 as AppIndicator3
+except (ValueError, ImportError):
+    # Older distros (e.g. Ubuntu 18.04) ship the un-renamed AppIndicator3 typelib.
+    gi.require_version("AppIndicator3", "0.1")
+    from gi.repository import AppIndicator3 as AppIndicator3
 from gi.repository import GLib, Gtk
 
 SYNC_UNIT = "proton-drive-sync.service"

@@ -1,0 +1,15 @@
+{
+    "name": "proton-drive-sync",
+    "version": "0.2.0",
+    "private": true,
+    "description": "Bidirectional sync between a local folder and Proton Drive, with OneDrive-style files on demand",
+    "license": "MIT",
+    "engines": {
+        "bun": ">=1.4.2"
+    },
+    "scripts": {
+        "build": "bash packaging/build.sh",
+        "typecheck": "bun x tsc -p tsconfig.json",
+        "test": "bun test test/"
+    }
+}

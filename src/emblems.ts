@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:
 import { homedir } from 'node:os';
 import path from 'node:path';
 
+import { emblemAssetPath } from './approot';
 import { emblemsEnabled, localRoot } from './config';
 import { log } from './log';
 import * as st from './state';
@@ -43,7 +44,7 @@ export function desiredEmblems(): Map<string, string> {
 export type ApplyResult = 'ok' | 'skip' | 'fail';
 export type ApplyFn = (rel: string, keyword: string | null) => Promise<ApplyResult>;
 
-const assetSource = path.join(import.meta.dir, '..', 'assets', 'emblem-cloud.svg');
+const assetSource = emblemAssetPath;
 const iconDestDir = path.join(homedir(), '.local', 'share', 'icons', 'hicolor', 'scalable', 'emblems');
 
 /** Keep the custom cloud badge present in the user's icon theme (Nautilus resolves `emblem-cloud` there). */

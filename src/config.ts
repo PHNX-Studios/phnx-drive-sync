@@ -1,18 +1,22 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-export const APP_VERSION = 'external-drive-syncengine@0.1.0-alpha';
+// Version lives in the repository root package.json (single source of truth),
+// which also drives the package artifacts and `proton-drive-sync version`.
+export { APP_VERSION } from './version';
 export const CLIENT_UID_PREFIX = 'syncengine';
 
 const stateHome = process.env.DRIVE_SYNC_HOME;
-export const shareDir = stateHome ? path.join(stateHome, 'share') : path.join(homedir(), '.local', 'share', 'drive-sync');
+const dataHome = process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share');
+const stateBase = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
+export const shareDir = stateHome ? path.join(stateHome, 'share') : path.join(dataHome, 'drive-sync');
 /** Mount point the user sees (Phase 2: served by the FUSE sidecar). */
 export const localRoot = path.resolve(process.env.DRIVE_SYNC_ROOT || path.join(homedir(), 'Proton Drive'));
 /** Real on-disk tree: what scan/watcher/execute/filters operate on. */
 export const treeRoot = path.resolve(process.env.DRIVE_SYNC_TREE || path.join(shareDir, 'tree'));
 export const remoteRootPath = (process.env.DRIVE_SYNC_REMOTE || '').replace(/^\/+|\/+$/g, '');
 
-export const stateDir = stateHome ? path.join(stateHome, 'state') : path.join(homedir(), '.local', 'state', 'drive-sync');
+export const stateDir = stateHome ? path.join(stateHome, 'state') : path.join(stateBase, 'drive-sync');
 export const stateDbPath = path.join(shareDir, 'state.db');
 export const statusFile = path.join(stateDir, 'status.json');
 export const logFile = path.join(stateDir, 'drive-sync.log');
@@ -37,6 +41,18 @@ export const watcherDebounceMs = 3_000;
 export function watcherPollMs(): number {
     const v = Number(process.env.DRIVE_SYNC_POLL_MS || 120_000);
     return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/**
+ * How long shutdown waits for the in-flight sync pass to finish its current file
+ * operation before unmounting and exiting (ms, default 120000). The pass stops
+ * at the next action boundary once shutdown is requested, so this only bounds
+ * the wait for the operation already running. Keep systemd's `TimeoutStopSec`
+ * on proton-drive-sync.service above this value so the graceful path wins.
+ */
+export function shutdownGraceMs(): number {
+    const v = Number(process.env.DRIVE_SYNC_SHUTDOWN_GRACE_MS || 120_000);
+    return Number.isFinite(v) && v >= 0 ? v : 120_000;
 }
 
 /**

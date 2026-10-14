@@ -7,18 +7,57 @@ built directly on the official [Proton Drive SDK](https://github.com/ProtonDrive
 Requires: [bun](https://bun.sh) and an authenticated session via the official
 `proton-drive` CLI (`proton-drive` re-login if the session expires).
 
-## Usage
+## Install
+
+Download the release tarball for your architecture, then run its installer. It
+is self-contained: the engine and the official login CLI are compiled to single
+binaries (Bun runtime + all dependencies embedded, glibc 2.17+), and the
+installer wires up systemd user units, autostart, icons and the Nautilus
+context menu. Everything lands under `~/.local`; the only elevated step is
+installing a small set of host packages (fuse3, python3, GTK/AppIndicator,
+inotify-tools, gvfs, libnotify, gnome-keyring) via your package manager.
 
 ```sh
-./proton-drive-sync.sh run            # daemon: initial full pass, then events + watcher + interval
-./proton-drive-sync.sh once           # single full pass (exit 0 ok, 2 errors, 3 auth)
-./proton-drive-sync.sh once --dry-run # classify only: report planned actions, change nothing
-./proton-drive-sync.sh status         # print status.json
-./proton-drive-sync.sh unpin <paths…> # free local space; files stay on Proton Drive
-./proton-drive-sync.sh pin <paths…>   # download online-only files back to this device
-./proton-drive-sync.sh evict [paths…] # bulk "Free up space": no paths = every local file
-./proton-drive-sync.sh prefetch on|off|status  # recall-on-hover toggle (default off)
-./proton-drive-sync.sh restart         # systemctl --user restart + notification
+tar xzf proton-drive-sync-<version>-linux-<arch>.tar.gz
+cd proton-drive-sync-<version>-linux-<arch>
+./install.sh                 # detects the distro, installs host deps, wires everything
+proton-drive-sync login      # the only manual step: sign in to Proton Drive
+```
+
+Installer flags: `--no-system-deps` (skip the package-manager step; the engine
+still runs and degrades files-on-demand/tray when pieces are missing),
+`--enable-autoupdate` / `--disable-autoupdate` (weekly `proton-drive-sync update`
+via a systemd user timer), and `--force` (reinstall the same version).
+
+Upgrades are handled by re-running a newer tarball's installer: it refuses to
+downgrade, no-ops on the same version, and preserves all state under
+`~/.local/share/drive-sync` and `~/.local/state/drive-sync`.
+
+`proton-drive-sync update` trusts the configured release host over TLS and
+verifies the tarball's SHA-256 from the release manifest before running the
+installer (as the ordinary user). It refuses releases whose `min_glibc`/
+`min_kernel`/`min_python` exceed the host, so an old machine is never handed a
+binary it cannot run. Point it at a mirror with `DRIVE_SYNC_RELEASE_URL` or
+`update --url <manifest>`.
+
+## Usage
+
+Once installed the `proton-drive-sync` command is on `~/.local/bin` (from a dev
+checkout use `bun run src/index.ts <cmd>` or `./proton-drive-sync.sh <cmd>`):
+
+```sh
+proton-drive-sync run            # daemon: initial full pass, then events + watcher + interval
+proton-drive-sync once           # single full pass (exit 0 ok, 2 errors, 3 auth)
+proton-drive-sync once --dry-run # classify only: report planned actions, change nothing
+proton-drive-sync status         # print status.json
+proton-drive-sync unpin <paths…> # free local space; files stay on Proton Drive
+proton-drive-sync pin <paths…>   # download online-only files back to this device
+proton-drive-sync evict [paths…] # bulk "Free up space": no paths = every local file
+proton-drive-sync prefetch on|off|status  # recall-on-hover toggle (default off)
+proton-drive-sync login          # sign in to Proton Drive (bundled official CLI)
+proton-drive-sync restart        # systemctl --user restart + wait for the FUSE mount
+proton-drive-sync update [--check]  # install a newer release, if one is available
+proton-drive-sync version        # print the version
 ```
 
 `pin`/`unpin`/`evict` talk to the running daemon over a unix socket (`rpc.sock`),
@@ -28,25 +67,23 @@ recursively over their files (folders themselves always stay on disk).
 sync pass first and re-check; exit 2 means some paths failed (per-path detail on
 stdout/stderr).
 
-systemd (user):
+systemd (user): the installer enables and starts the units. To drive them by hand:
 
 ```sh
-./packaging/install.sh       # deploy runtime to ~/.local/lib/proton-drive-sync + wire units/autostart
-systemctl --user enable --now proton-drive-sync.service
+systemctl --user status proton-drive-sync.service proton-drive-sync-tray.service
+systemctl --user restart proton-drive-sync.service
 journalctl --user -u proton-drive-sync.service -f
 ```
 
-`packaging/install.sh` copies the runtime (engine, sidecar, tray, vendored SDK
-sources) to `~/.local/lib/proton-drive-sync/` on the **internal disk** and points the
-systemd user units and XDG autostart there — startup never waits on the
-external SSD (`~/Projects` is a dev checkout; state the engine manages already
-lives under `~/.local`). Re-run it after changing runtime code in the
-checkout.
+The installer deploys the compiled runtime to `~/.local/lib/proton-drive-sync/`
+on the **internal disk** and points the systemd user units and XDG autostart
+there — startup never waits on an external drive (state the engine manages
+already lives under `~/.local`). Upgrades reuse the same installer.
 
 Auto-start: the service is `enabled`, so it starts at login; the tray is
 autostarted via `~/.config/autostart/proton-drive-sync-tray.desktop` and also via `proton-drive-sync-tray.service` user unit for resilience. If the engine
 ever needs a manual kick, **Proton Drive Sync (restart engine)** in the application
-menu (and on the Desktop) runs `proton-drive-sync.sh restart` — restarts the service,
+menu (and on the Desktop) runs `proton-drive-sync restart` — restarts the service,
 waits for the FUSE heartbeat to come back, and reports the result via
 `notify-send`. If the sidecar dies while the engine runs, the engine relaunches
 it automatically within seconds (see `mount` in `status.json`); the tray's
@@ -160,11 +197,14 @@ modes degrade quietly: `gio` missing → logged once, badges skipped; mount
 down → missing paths deferred until the next pass.
 
 Sidecar requirements: `python3`, `fusermount3`/`libfuse3`, and `pyfuse3`,
-`trio`, `cffi` importable with `PYTHONPATH=~/.local/share/drive-sync/python`
-(the engine probes the import at startup; if it fails the engine still runs —
-the mount point stays empty and the tray shows "Mount degraded").
+`trio`, `cffi` importable with `PYTHONPATH=~/.local/share/drive-sync/python`.
+`./install.sh` installs these for you (distro packages where available, falling
+back to `pip install --target ~/.local/share/drive-sync/python`). The engine
+probes the import at startup; if it fails the engine still runs — the mount
+point stays empty and the tray shows "Mount degraded".
 
-Nautilus context menu (multi-select supported):
+Nautilus context menu (multi-select supported): `./install.sh` installs the
+scripts into `~/.local/share/nautilus/scripts/`. From a dev checkout:
 
 ```sh
 mkdir -p ~/.local/share/nautilus/scripts
@@ -208,7 +248,7 @@ to disappear from Proton Drive.
 | pin/unpin rpc socket | `~/.local/state/drive-sync/rpc.sock` (unlinked at boot/shutdown) |
 | sidecar heartbeat (tray mount check) | `~/.local/state/drive-sync/mount-ok` |
 | tray icon + icons | `~/.local/lib/proton-drive-sync/tray/` (launcher: `~/.local/bin/proton-drive-sync-tray`; autostart: `~/.config/autostart/proton-drive-sync-tray.desktop`) |
-| installed runtime (internal disk) | `~/.local/lib/proton-drive-sync/` (`packaging/install.sh`; SSD checkout = dev tree only) |
+| installed runtime (internal disk) | `~/.local/lib/proton-drive-sync/` (compiled engine + bundled login CLI + sidecar/tray; installed from the release tarball) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
 last pass info, error counts, the recall-on-hover `prefetch` toggle, and
@@ -226,7 +266,17 @@ default: whole drive), `DRIVE_SYNC_HOME` (relocate all state — used for isolat
 tests), `DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `DRIVE_SYNC_NEW_FILES` (`local`|`online`),
 `DRIVE_SYNC_EVICT_FREE_GB` (auto-evict threshold, 0 = off),
 `DRIVE_SYNC_PREFETCH` (sidecar recall-on-hover default, off unless set),
-`DRIVE_SYNC_POLL_MS` (watcher-unhealthy safety poll interval, 0 = off).
+`DRIVE_SYNC_POLL_MS` (watcher-unhealthy safety poll interval, 0 = off),
+`DRIVE_SYNC_SHUTDOWN_GRACE_MS` (how long shutdown waits for the in-flight file
+operation to finish, default 120000; keep the unit's `TimeoutStopSec` above it).
+
+**Shutdown.** On `SIGTERM`/`SIGINT` the engine stops scheduling passes, asks the
+running pass to stop, and then **finishes the file operation already in flight**
+before unmounting and exiting (the pass stops at the next action boundary, so no
+upload or download is cut mid-transfer). It waits up to
+`DRIVE_SYNC_SHUTDOWN_GRACE_MS` for the pass to unwind; a very large transfer that
+exceeds that is abandoned safely (downloads use a `.part` temp file and resume,
+uploads re-run) rather than blocking logout forever.
 
 A full remote walk of the current tree (~10.3k nodes, 1.27k folders) takes
 ~5 min warm, so it runs **once at login** (the initial pass), and afterwards
@@ -254,7 +304,14 @@ cd vendor/cli && bun install        # bootstrap deps (node_modules is a symlink 
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
 bun test test/                      # classify/placeholder/evict unit tests (temp state)
 ./proton-drive-sync.sh once --dry-run      # classify without changing anything
+bash packaging/build.sh             # build the portable release tarball into dist/
 ```
+
+`packaging/build.sh` compiles `src/index.ts` and the login CLI into
+self-contained binaries (Bun runtime + all modules embedded, glibc 2.17+),
+assembles the runtime resources, and emits `dist/proton-drive-sync-<version>-linux-<arch>.tar.gz`
+plus `dist/latest.json` (the manifest `proton-drive-sync update` consumes).
+The release version comes from the root `package.json`.
 
 ## Known caveats
 

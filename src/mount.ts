@@ -2,11 +2,11 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
+import { sidecarPath } from './approot';
 import { localRoot, rpcSocket, shareDir, stateDbPath, stateDir, treeRoot } from './config';
 import { log, setStatus, status } from './log';
 
 export const mountOkPath = path.join(stateDir, 'mount-ok');
-const sidecarPath = path.join(import.meta.dir, '..', 'python', 'sidecar.py');
 const pyLibDir = path.join(shareDir, 'python');
 
 export function isMountPoint(p: string): boolean {
@@ -18,8 +18,17 @@ export function isMountPoint(p: string): boolean {
     }
 }
 
+/** fusermount3 is in /usr/bin on essentially every fuse3 distro, /bin on some. */
+function findFusermount(): string {
+    for (const p of ['/usr/bin/fusermount3', '/bin/fusermount3']) {
+        if (existsSync(p)) return p;
+    }
+    return 'fusermount3'; // fall back to a PATH lookup
+}
+const FUSERMOUNT = findFusermount();
+
 function fusermount(...args: string[]): number {
-    const r = spawnSync('/usr/bin/fusermount3', args, { stdio: 'ignore' });
+    const r = spawnSync(FUSERMOUNT, args, { stdio: 'ignore' });
     return r.status ?? -1;
 }
 
@@ -44,7 +53,9 @@ let current: Sidecar | null = null;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 function sidecarEnv(): NodeJS.ProcessEnv {
-    return { ...process.env, PYTHONPATH: pyLibDir };
+    // preserve any user PYTHONPATH; prepend the engine's sidecar lib dir
+    const existing = process.env.PYTHONPATH;
+    return { ...process.env, PYTHONPATH: existing ? `${pyLibDir}${path.delimiter}${existing}` : pyLibDir };
 }
 
 export async function startMount(): Promise<Sidecar> {
