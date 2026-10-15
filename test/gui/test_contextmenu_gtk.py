@@ -16,7 +16,8 @@ try:
     import gi
 
     gi.require_version("Gtk", "4.0")
-    from gi.repository import Gtk  # noqa: E402
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import Gdk, Gtk  # noqa: E402
 
     from phnxdgui import contextmenu  # noqa: E402
 
@@ -24,6 +25,26 @@ try:
 except Exception as _exc:  # pragma: no cover - only when PyGObject is missing
     HAVE_GTK = False
     _GTK_ERROR = _exc
+
+
+def _display_available():
+    """True only when GTK has a usable display.
+
+    Creating a widget with no display segfaults on some GTK builds (seen with
+    GTK 4.14 on the CI runners). ``Gtk.init_check()`` alone is not enough (it
+    reports success with no display on at least one build), so require an actual
+    ``Gdk.Display``. CI provides one with ``xvfb-run``.
+    """
+    if not HAVE_GTK:
+        return False
+    try:
+        Gtk.init_check()
+        return Gdk.Display.get_default() is not None
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+HAVE_DISPLAY = _display_available()
 
 
 class _FakeWindow:
@@ -43,7 +64,7 @@ class _FakeRow:
         self.pinned = pinned
 
 
-@unittest.skipUnless(HAVE_GTK, "PyGObject/GTK not available")
+@unittest.skipUnless(HAVE_DISPLAY, "no GTK display available (run under xvfb-run)")
 class MenuButtons(unittest.TestCase):
     def test_item_button_activates_action(self):
         window = _FakeWindow()

@@ -372,7 +372,7 @@ bun run deps                        # install vendored dependency trees (cli + S
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
 bun test test/                      # classify/placeholder/evict/listing unit tests (temp state)
 ./phnx-drive-sync.sh once --dry-run      # classify without changing anything
-python3 -m unittest discover -s test/gui  # GUI unit tests (no display required)
+xvfb-run -a python3 -m unittest discover -s test/gui  # GUI unit tests (widget tests need a display)
 xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check  # headless GUI smoke
 ruff check .                        # lint the Python GUI, tray and tests
 bash packaging/build.sh             # build the portable release tarball into dist/

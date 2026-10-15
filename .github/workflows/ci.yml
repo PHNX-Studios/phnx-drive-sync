@@ -64,8 +64,11 @@ jobs:
       - name: Byte-compile the GUI and tray
         run: python3 -m compileall -q gui tray test/gui test/tray
 
+      # Under Xvfb: some tests build real GTK widgets (context-menu buttons, the
+      # listing reconcile). With no display those are skipped, and on GTK 4.14
+      # widget creation without a display segfaults, so give them a display.
       - name: GUI unit tests
-        run: python3 -m unittest discover -s test/gui -p 'test_*.py' -v
+        run: xvfb-run -a python3 -m unittest discover -s test/gui -p 'test_*.py' -v
 
       - name: Tray menu structure tests
         run: python3 -m unittest discover -s test/tray -p 'test_*.py' -v

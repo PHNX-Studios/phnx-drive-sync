@@ -7,7 +7,11 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "gui")))
 
 try:
-    from gi.repository import Gtk  # noqa: E402
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import Gdk, Gtk  # noqa: E402
 
     from phnxdgui.filebrowser import FileBrowser, compare_mtime, compare_name, compare_size, compare_status  # noqa: E402
     from phnxdgui.rows import FileRow, _entry_fields  # noqa: E402
@@ -16,6 +20,26 @@ try:
 except Exception as _exc:  # pragma: no cover - only when PyGObject is missing
     HAVE_GTK = False
     _GTK_ERROR = _exc
+
+
+def _display_available():
+    """True only when GTK has a usable display.
+
+    ``FileRow`` is a plain GObject and needs no display, but constructing a
+    ``FileBrowser`` creates widgets, and creating a widget with no display
+    segfaults on some GTK builds (seen with GTK 4.14 on the CI runners). Require
+    an actual ``Gdk.Display``; CI provides one via xvfb-run.
+    """
+    if not HAVE_GTK:
+        return False
+    try:
+        Gtk.init_check()
+        return Gdk.Display.get_default() is not None
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+HAVE_DISPLAY = _display_available()
 
 
 def file_entry(name, **over):
@@ -138,7 +162,7 @@ class _FakeWindow:
         pass
 
 
-@unittest.skipUnless(HAVE_GTK, "PyGObject/GTK not available")
+@unittest.skipUnless(HAVE_DISPLAY, "no GTK display available (run under xvfb-run)")
 class Reconcile(unittest.TestCase):
     def _browser(self):
         return FileBrowser(_FakeWindow())
