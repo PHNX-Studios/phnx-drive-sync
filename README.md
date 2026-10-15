@@ -109,7 +109,11 @@ A file browser over `~/Proton Drive` that shows each entry's sync state as a
 badge (cloud = online-only, green check = on this device, amber = pending) and
 offers open, **Keep on this device** (pin), **Free up space** for the selection
 (unpin) or everything local (bulk evict), new folder, rename, move to trash,
-**Sync now**, a recall-on-hover toggle and an editor for `.protonignore`. It
+**Sync now**, a recall-on-hover toggle and an editor for `.protonignore`.
+Right-click any file or folder for a context menu that adapts to the selection
+(Open, Keep on this device, Free up space, Rename, Move to trash); right-click
+empty space for New folder, Sync now, Free up space for all local files and the
+filters editor. Engine-backed items are hidden while the service is stopped. It
 talks to the mount for file operations (so placeholder recall, metadata-only
 renames and remote trash all apply automatically) and to the running engine over
 `rpc.sock` for status and sync control; with the engine stopped it shows a
@@ -363,6 +367,7 @@ bun test test/                      # classify/placeholder/evict/listing unit te
 ./phnx-drive-sync.sh once --dry-run      # classify without changing anything
 python3 -m unittest discover -s test/gui  # GUI unit tests (no display required)
 xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check  # headless GUI smoke
+ruff check .                        # lint the Python GUI, tray and tests
 bash packaging/build.sh             # build the portable release tarball into dist/
 ```
 

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
 ### Added
 
 - File manager GUI (`phnx-drive-sync-gui`): a GTK4 + Libadwaita window over the
@@ -13,6 +15,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pending), folder navigation, open, keep-on-this-device, free up space
   (selection and all-local-files), new folder, rename, move to trash, Sync now,
   a recall-on-hover toggle and an ignore-filters editor.
+- File manager GUI right-click context menu for files and folders: Open, Keep on
+  this device, Free up space, Rename and Move to trash, plus a background menu
+  (New folder, Sync now, Free up space for all local files, Edit ignore filters).
+  Items adapt to the selection and engine-dependent items are hidden while the
+  sync engine is stopped.
 - Engine RPC `list` (read-only per-directory status for the GUI) and `sync`
   (trigger an incremental pass without depending on systemd/SIGUSR1).
 
@@ -62,5 +69,6 @@ First public release.
 - `package.json` is no longer private and uses the vendored TypeScript for
   `typecheck`.
 
-[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PHNX-Studios/phnx-drive-sync/releases/tag/v0.2.0

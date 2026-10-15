@@ -10,6 +10,18 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Runs `ruff check` with the pyproject.toml config; pinned for
+      # reproducible lint results.
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: "0.17.0"
+
   test:
     name: Type-check and unit tests
     runs-on: ubuntu-latest

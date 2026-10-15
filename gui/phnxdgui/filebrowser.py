@@ -12,9 +12,10 @@ import threading
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 
-from . import dialogs, paths, rpcclient, util
+from . import contextmenu, dialogs, paths, rpcclient, util
 from .rows import FileRow
 
 CSS_CLASSES = ("synced", "cloud", "pending", "newsync", "dim")
@@ -87,6 +88,7 @@ class FileBrowser:
         self.column_view.set_model(self.selection)
         self._build_columns()
         self.column_view.connect("activate", self._on_activate)
+        self._attach_background_gesture()
 
     # --- construction -------------------------------------------------------
 
@@ -126,8 +128,7 @@ class FileBrowser:
         factory.connect("bind", bind_func)
         return factory
 
-    @staticmethod
-    def _name_setup(_factory, item):
+    def _name_setup(self, _factory, item):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         image = Gtk.Image()
         label = Gtk.Label(xalign=0)
@@ -135,6 +136,7 @@ class FileBrowser:
         box.append(image)
         box.append(label)
         item.set_child(box)
+        self._attach_row_gesture(item, box)
 
     def _name_bind(self, _factory, item):
         row = item.get_item()
@@ -149,11 +151,11 @@ class FileBrowser:
         label.set_text(row.name)
         self._apply_css(label, row.badge_css)
 
-    @staticmethod
-    def _label_setup(_factory, item):
+    def _label_setup(self, _factory, item):
         label = Gtk.Label(xalign=0)
         label.set_ellipsize(Pango.EllipsizeMode.END)
         item.set_child(label)
+        self._attach_row_gesture(item, label)
 
     def _bind_size(self, _factory, item):
         row = item.get_item()
@@ -263,6 +265,66 @@ class FileBrowser:
                 if item is not None:
                     rows.append(item)
         return rows
+
+    # --- context menu -------------------------------------------------------
+
+    def _attach_row_gesture(self, item, child):
+        """Right-click on any cell of a row opens that row's context menu.
+
+        The Gtk.ListItem is passed as user data so the handler can resolve the
+        currently bound FileRow regardless of factory recycling.
+        """
+        gesture = Gtk.GestureClick.new()
+        gesture.set_button(Gdk.BUTTON_SECONDARY)
+        gesture.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        gesture.connect("pressed", self._on_row_right_click, item)
+        child.add_controller(gesture)
+
+    def _attach_background_gesture(self):
+        """Right-click on empty space opens the folder background menu.
+
+        BUBBLE phase lets it fire on the column view's own surface; row clicks
+        are claimed by the cell gesture above and never reach it.
+        """
+        gesture = Gtk.GestureClick.new()
+        gesture.set_button(Gdk.BUTTON_SECONDARY)
+        gesture.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        gesture.connect("pressed", self._on_background_right_click)
+        self.column_view.add_controller(gesture)
+
+    def _on_row_right_click(self, gesture, _n_press, x, y, item):
+        row = item.get_item()
+        if row is None:
+            return
+        # Claim the sequence so the background controller on the column view
+        # does not also fire for a row click.
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        self._select_only_if_needed(item)
+        ctx = contextmenu.context_for(self.selected_rows(), rpcclient.engine_available())
+        contextmenu.present(self._window, gesture.get_widget(), x, y, ctx)
+
+    def _on_background_right_click(self, gesture, _n_press, x, y):
+        widget = gesture.get_widget()
+        # The header is a child of the column view, so its clicks bubble here
+        # too; a right-click on a column header is not "empty space".
+        picked = widget.pick(x, y, Gtk.PickFlags.DEFAULT)
+        if picked is not None and picked.get_ancestor("GtkColumnViewTitle") is not None:
+            return
+        self.show_background_menu(widget, x, y)
+
+    def show_background_menu(self, widget, x, y):
+        """Present the no-selection menu (also used by the empty-folder page)."""
+        ctx = contextmenu.context_for([], rpcclient.engine_available())
+        contextmenu.present(self._window, widget, x, y, ctx)
+
+    def _select_only_if_needed(self, item):
+        """Right-clicking an unselected row selects just it; an already selected
+        row keeps the current (possibly multi-) selection, as file managers do."""
+        position = item.get_position()
+        if position == Gtk.INVALID_LIST_POSITION:
+            return
+        if not self.selection.is_selected(position):
+            self.selection.select_item(position, True)
 
     # --- actions ------------------------------------------------------------
 

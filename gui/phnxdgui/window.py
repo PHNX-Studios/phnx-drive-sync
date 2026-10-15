@@ -3,8 +3,9 @@
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from . import dialogs, paths, rpcclient, util
 from .filebrowser import FileBrowser
@@ -19,6 +20,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._closing = False
         self._status = {}
         self._engine_down = False
+        self._context_popover = None
 
         self._browser = FileBrowser(self)
         self._build_ui()
@@ -109,6 +111,11 @@ class MainWindow(Adw.ApplicationWindow):
         content_box.append(self._progress_revealer)
 
         self._empty_page = Adw.StatusPage(icon_name="folder-open-symbolic", title="This folder is empty")
+        empty_gesture = Gtk.GestureClick.new()
+        empty_gesture.set_button(Gdk.BUTTON_SECONDARY)
+        empty_gesture.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        empty_gesture.connect("pressed", self._on_empty_right_click)
+        self._empty_page.add_controller(empty_gesture)
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroller.set_vexpand(True)
@@ -284,6 +291,9 @@ class MainWindow(Adw.ApplicationWindow):
             self._banner.set_revealed(False)
 
     # --- actions ------------------------------------------------------------
+
+    def _on_empty_right_click(self, gesture, _n_press, x, y):
+        self._browser.show_background_menu(gesture.get_widget(), x, y)
 
     def _sync_now(self):
         if not rpcclient.engine_available():
