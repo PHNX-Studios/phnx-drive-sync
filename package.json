@@ -1,6 +1,6 @@
 {
     "name": "phnx-drive-sync",
-    "version": "0.2.0",
+    "version": "0.3.2",
     "description": "Bidirectional sync between a local folder and Proton Drive, with OneDrive-style files on demand",
     "license": "MIT",
     "author": "PHNX Studios",

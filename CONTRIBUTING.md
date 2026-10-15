@@ -10,8 +10,8 @@ unofficial project and is not affiliated with Proton AG.
 - Never commit secrets, session tokens, personal paths, or a real `state.db`.
 - Do not weaken the sync safety invariants. The behavior is documented in the
   README under "Conflict policy" and "Files on demand".
-- `main` is protected: changes land through a pull request and the CI check
-  (`Type-check and unit tests`) must pass; force-pushes are rejected.
+- `main` is protected: changes land through a pull request and the CI checks
+  (type-check, unit tests, GUI and lint) must pass; force-pushes are rejected.
 
 ## Development setup
 
@@ -42,6 +42,7 @@ bash packaging/build.sh
 
 - [ ] `tsc -p tsconfig.json` is clean (strict).
 - [ ] `bun test test/` passes.
+- [ ] `ruff check .` is clean (Python GUI, tray and tests).
 - [ ] New behavior has tests where practical (`test/`).
 - [ ] README updated if user-visible behavior changes.
 - [ ] No personal paths, credentials, or machine-specific values committed.

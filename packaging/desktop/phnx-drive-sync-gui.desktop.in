@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PHNX Drive Sync
+Comment=Manage your Proton Drive files (unofficial; not affiliated with Proton AG)
+Exec=@HOME@/.local/bin/phnx-drive-sync-gui
+Icon=phnx-drive-sync
+Terminal=false
+Categories=Utility;FileManager;Network;
+StartupWMClass=org.phnxstudios.PhnxDriveSync

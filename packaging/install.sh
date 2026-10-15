@@ -62,7 +62,15 @@ APPS_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 NAUTILUS_DIR="$HOME/.local/share/nautilus/scripts/Proton Drive"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-PYDIR="$DATA_HOME/drive-sync/python"
+# sidecar python deps live under the app data dir. Use whichever location
+# currently holds them: on an upgrade the legacy dir still holds them until the
+# migration below moves it into place, so pip never targets an empty path.
+PYDIR="$DATA_HOME/phnx-drive-sync/python"
+if command -v python3 >/dev/null 2>&1 &&
+    ! PYTHONPATH="$DATA_HOME/phnx-drive-sync/python" python3 -c 'import pyfuse3' >/dev/null 2>&1 &&
+    PYTHONPATH="$DATA_HOME/drive-sync/python" python3 -c 'import pyfuse3' >/dev/null 2>&1; then
+    PYDIR="$DATA_HOME/drive-sync/python"
+fi
 
 log() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -118,6 +126,7 @@ case "$PKG_FAM" in
         PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
         INOTIFY_PKGS="inotify-tools libinotifytools0"
         APPIND_PKGS="gir1.2-ayatanaappindicator3-0.1 libayatana-appindicator3-1 gir1.2-appindicator3-0.1 libappindicator3-1"
+        GUI_PKGS="gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0"
         ;;
     rpm)
         CORE_PKGS="fuse3 python3 python3-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
@@ -125,6 +134,7 @@ case "$PKG_FAM" in
         PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
         INOTIFY_PKGS="inotify-tools inotify-tools-libs"
         APPIND_PKGS="libayatana-appindicator-gtk3 libappindicator-gtk3"
+        GUI_PKGS="gtk4 libadwaita"
         ;;
     suse)
         CORE_PKGS="fuse3 python3 python3-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
@@ -132,6 +142,7 @@ case "$PKG_FAM" in
         PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
         INOTIFY_PKGS="inotify-tools libinotifytools0"
         APPIND_PKGS="libayatana-appindicator3-1"
+        GUI_PKGS="typelib-1_0-Gtk-4_0 libadwaita-1-0 typelib-1_0-Adw-1"
         ;;
     arch)
         CORE_PKGS="fuse3 python python-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
@@ -139,6 +150,7 @@ case "$PKG_FAM" in
         PY_PKGS="python-pyfuse3 python-trio python-cffi"
         INOTIFY_PKGS="inotify-tools"
         APPIND_PKGS="libayatana-appindicator"
+        GUI_PKGS="gtk4 libadwaita"
         ;;
     *)
         CORE_PKGS=""
@@ -146,6 +158,7 @@ case "$PKG_FAM" in
         PY_PKGS=""
         INOTIFY_PKGS=""
         APPIND_PKGS=""
+        GUI_PKGS=""
         ;;
 esac
 
@@ -184,6 +197,7 @@ if [ "$INSTALL_SYSDEPS" -eq 1 ]; then
     if [ -z "$PKG_MGR" ] || [ "$PKG_FAM" = unknown ]; then
         warn "Unknown package manager; skipping automatic dependency install."
         warn "For files-on-demand install: fuse3, python3, inotify-tools, gtk3 + AppIndicator, gvfs, libnotify, gnome-keyring."
+        warn "For the file manager GUI install: gtk4 + libadwaita (gir1.2-gtk-4.0 gir1.2-adw-1)."
     elif [ -z "$SUDO" ] && [ "$(id -u)" -ne 0 ]; then
         warn "No sudo/doas/pkexec; skipping system dependency install."
     else
@@ -195,6 +209,9 @@ if [ "$INSTALL_SYSDEPS" -eq 1 ]; then
         # AppIndicator: only one of the candidate names exists per distro version.
         for p in $APPIND_CANDIDATES; do pkg_try "$p"; done
         for p in $PY_PKGS; do pkg_try "$p"; done
+        # GTK4 + Libadwaita: the file manager GUI toolchain (optional; the engine
+        # and tray work without it, the GUI then just will not launch).
+        for p in $GUI_PKGS; do pkg_try "$p"; done
     fi
 fi
 
@@ -427,13 +444,58 @@ if [ "$SYSTEMD_USER" -eq 1 ]; then
     fi
 fi
 
-# app code only; user state lives under ~/.local/{share,state}/drive-sync and is never touched
+# --- migrate the pre-rename state/data dirs (drive-sync -> phnx-drive-sync) ----
+# All sync state (baseline, placeholder/keep marks, real tree, SDK cache) moves
+# with it, so an upgrade never re-downloads or re-adopts anything. Best effort:
+# the engine also migrates on its next start.
+STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
+
+migrate_merge() {
+    # merge $1 into $2: move entries missing from $2, recurse into shared dirs
+    local old="$1" new="$2" entry base
+    mkdir -p "$new"
+    for entry in "$old"/* "$old"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        base="$(basename "$entry")"
+        if [ ! -e "$new/$base" ]; then
+            mv "$entry" "$new/$base" 2>/dev/null || true
+        elif [ -d "$entry" ] && [ -d "$new/$base" ]; then
+            migrate_merge "$entry" "$new/$base"
+            rmdir "$entry" 2>/dev/null || true
+        fi
+    done
+    rmdir "$old" 2>/dev/null || true
+}
+
+migrate_layout() {
+    # $1 = old dir, $2 = new dir; move the whole dir, else merge contents into it
+    local old="$1" new="$2"
+    [ -d "$old" ] || return 0
+    if [ ! -e "$new" ]; then
+        mv "$old" "$new" 2>/dev/null || true
+        return 0
+    fi
+    migrate_merge "$old" "$new"
+}
+
+migrate_layout "$DATA_HOME/drive-sync" "$DATA_HOME/phnx-drive-sync"
+migrate_layout "$STATE_BASE/drive-sync" "$STATE_BASE/phnx-drive-sync"
+if [ -f "$STATE_BASE/phnx-drive-sync/drive-sync.log" ] && [ ! -f "$STATE_BASE/phnx-drive-sync/phnx-drive-sync.log" ]; then
+    mv "$STATE_BASE/phnx-drive-sync/drive-sync.log" "$STATE_BASE/phnx-drive-sync/phnx-drive-sync.log" 2>/dev/null || true
+fi
+# repoint an existing env file at the new data dir (only /drive-sync/ paths change)
+if [ -f "$CONFIG_DIR/env" ]; then
+    sed -i 's#/drive-sync/#/phnx-drive-sync/#g' "$CONFIG_DIR/env" 2>/dev/null || true
+fi
+
+# app code only; user state lives under ~/.local/{share,state}/phnx-drive-sync and is never touched
 rm -rf "$LIB"
 mkdir -p "$LIB"
 cp -a "$SELF_DIR/phnx-drive-sync-engine" "$LIB/"
 [ -f "$SELF_DIR/proton-drive" ] && cp -a "$SELF_DIR/proton-drive" "$LIB/"
 cp -a "$SELF_DIR/python" "$LIB/"
 cp -a "$SELF_DIR/tray" "$LIB/"
+cp -a "$SELF_DIR/gui" "$LIB/"
 cp -a "$SELF_DIR/assets" "$LIB/"
 cp -a "$SELF_DIR/README.md" "$LIB/README.md" 2>/dev/null || true
 cp -a "$SELF_DIR/LICENSE" "$LIB/LICENSE"
@@ -444,13 +506,14 @@ printf '%s\n' "$NEW_VERSION" > "$LIB/VERSION"
 install -m 0755 "$SELF_DIR/phnx-drive-sync-engine" "$LIB/phnx-drive-sync-engine"
 ln -sfn "$LIB/phnx-drive-sync-engine" "$BIN/phnx-drive-sync"
 install -m 0755 "$SELF_DIR/share/bin/phnx-drive-sync-tray" "$BIN/phnx-drive-sync-tray"
+install -m 0755 "$SELF_DIR/share/bin/phnx-drive-sync-gui" "$BIN/phnx-drive-sync-gui"
 
 # per-user env (never clobber an existing one)
 if [ ! -f "$CONFIG_DIR/env" ]; then
     cat > "$CONFIG_DIR/env" <<EOF
 # PHNX Drive Sync environment (read by phnx-drive-sync.service).
 # Defaults are baked into the engine; uncomment to override.
-PROTON_DRIVE_CACHE_DIR=$DATA_HOME/drive-sync/proton-cache
+PROTON_DRIVE_CACHE_DIR=$DATA_HOME/phnx-drive-sync/proton-cache
 PROTON_DRIVE_LOG_LEVEL=WARN
 # DRIVE_SYNC_NEW_FILES=online
 # DRIVE_SYNC_EVICT_FREE_GB=5
@@ -472,6 +535,7 @@ render() {
 }
 render "$SELF_DIR/share/autostart/phnx-drive-sync-tray.desktop.in" "$AUTOSTART_DIR/phnx-drive-sync-tray.desktop"
 render "$SELF_DIR/share/phnx-drive-sync-restart.desktop.in" "$APPS_DIR/phnx-drive-sync-restart.desktop"
+render "$SELF_DIR/share/phnx-drive-sync-gui.desktop.in" "$APPS_DIR/phnx-drive-sync-gui.desktop"
 [ -d "$HOME/Desktop" ] && render "$SELF_DIR/share/phnx-drive-sync-restart.desktop.in" "$HOME/Desktop/phnx-drive-sync-restart.desktop" || true
 
 install -m 0644 "$SELF_DIR/assets/phnx-drive-sync.svg" "$ICON_DIR/phnx-drive-sync.svg"
@@ -516,5 +580,6 @@ log "$APP $NEW_VERSION installed."
 log "The only manual step is signing in to Proton Drive:"
 log "  $BIN/phnx-drive-sync login"
 log ""
-log "Status:  $BIN/phnx-drive-sync status"
-log "Logs:    journalctl --user -u phnx-drive-sync.service -f"
+log "Status:     $BIN/phnx-drive-sync status"
+log "File manager: $BIN/phnx-drive-sync-gui   (also in the application menu)"
+log "Logs:       journalctl --user -u phnx-drive-sync.service -f"

@@ -4,6 +4,7 @@
 import fcntl
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -28,12 +29,16 @@ from gi.repository import GLib, Gtk
 SYNC_UNIT = "phnx-drive-sync.service"
 SYNC_DIR = os.path.expanduser("~/Proton Drive")
 ICON_DIR = os.path.join(_HERE, "icons")
-STATE_DIR = os.path.expanduser("~/.local/state/drive-sync")
+STATE_DIR = os.path.expanduser("~/.local/state/phnx-drive-sync")
 STATUS_FILE = os.path.join(STATE_DIR, "status.json")
 MOUNT_OK = os.path.join(STATE_DIR, "mount-ok")
 RPC_SOCK = os.path.join(STATE_DIR, "rpc.sock")
 MOUNT_STALE_S = 15  # sidecar heartbeats every 2s; anything older means it died
 EVICT_LABEL = "Free up space (all local files)"
+# Opening the file manager GUI: the installed launcher, else the dev-checkout
+# script next to this runtime (tray/ and gui/ are siblings under the libdir).
+GUI_BIN = os.path.expanduser("~/.local/bin/phnx-drive-sync-gui")
+GUI_SCRIPT = os.path.join(os.path.dirname(_HERE), "gui", "phnx-drive-sync-gui.py")
 
 ICONS = {
     "idle": "phnx-drive-sync-idle",
@@ -47,7 +52,6 @@ STATE = {"state": "idle", "detail": "Starting...", "active": False, "evicting": 
 indicator = None
 info_primary = None
 info_secondary = None
-actions_item = None
 pause_item = None
 evict_item = None
 
@@ -271,6 +275,30 @@ def open_folder(*_):
     subprocess.Popen(["xdg-open", SYNC_DIR])
 
 
+def open_app(*_):
+    """Open the file manager GUI (a separate GTK4 process; safe to launch twice)."""
+    argv = None
+    if os.path.exists(GUI_BIN):
+        argv = [GUI_BIN]
+    elif os.path.exists(GUI_SCRIPT):
+        py = shutil.which("python3") or shutil.which("python")
+        if py:
+            argv = [py, GUI_SCRIPT]
+    if argv is None:
+        subprocess.run(
+            ["notify-send", "PHNX Drive Sync", "File manager not found - reinstall phnx-drive-sync"],
+            capture_output=True,
+        )
+        return
+    try:
+        subprocess.Popen(argv)
+    except OSError as exc:
+        subprocess.run(
+            ["notify-send", "PHNX Drive Sync", f"Could not open the file manager: {exc}"],
+            capture_output=True,
+        )
+
+
 def show_log(*_):
     os.makedirs(STATE_DIR, exist_ok=True)
     path = os.path.join(STATE_DIR, "last-run.log")
@@ -355,7 +383,7 @@ def main():
     except OSError:
         sys.exit(0)
 
-    global indicator, info_primary, info_secondary, actions_item, pause_item, evict_item
+    global indicator, info_primary, info_secondary, pause_item, evict_item
 
     indicator = AppIndicator3.Indicator.new(
         "phnx-drive-sync", ICONS["idle"], AppIndicator3.IndicatorCategory.SYSTEM_SERVICES
@@ -376,28 +404,28 @@ def main():
     menu.append(info_secondary)
     menu.append(Gtk.SeparatorMenuItem())
 
-    # actions live in a submenu to keep the top level compact
-    actions_item = Gtk.MenuItem(label="Actions")
-    actions_menu = Gtk.Menu()
-    actions_item.set_submenu(actions_menu)
-
+    # actions are all top level (no submenus): sync, open the app, open the
+    # folder, show the last log, and bulk free up space
     sync_now_item = Gtk.MenuItem(label="Sync now")
     sync_now_item.connect("activate", sync_now)
-    actions_menu.append(sync_now_item)
+    menu.append(sync_now_item)
+
+    open_app_item = Gtk.MenuItem(label="Open PHNX Drive Sync")
+    open_app_item.connect("activate", open_app)
+    menu.append(open_app_item)
 
     open_item = Gtk.MenuItem(label="Open Proton Drive folder")
     open_item.connect("activate", open_folder)
-    actions_menu.append(open_item)
+    menu.append(open_item)
 
     log_item = Gtk.MenuItem(label="Show last log")
     log_item.connect("activate", show_log)
-    actions_menu.append(log_item)
+    menu.append(log_item)
 
     evict_item = Gtk.MenuItem(label=EVICT_LABEL)
     evict_item.connect("activate", free_up_space)
-    actions_menu.append(evict_item)
+    menu.append(evict_item)
 
-    menu.append(actions_item)
     menu.append(Gtk.SeparatorMenuItem())
 
     pause_item = Gtk.MenuItem(label="Pause syncing")
@@ -408,7 +436,6 @@ def main():
     quit_item.connect("activate", lambda *_: Gtk.main_quit())
     menu.append(quit_item)
 
-    actions_menu.show_all()
     menu.show_all()
     evict_item.set_visible(False)  # poll() reveals it when there is reclaimable space
     indicator.set_menu(menu)

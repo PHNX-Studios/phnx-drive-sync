@@ -26,6 +26,14 @@ export interface SyncProgress {
 export interface StatusShape {
     pid: number;
     state: string;
+    /**
+     * Monotonic "sync facts changed" counter. Bumped at the end of every pass
+     * and after every mutating RPC (pin/unpin/evict/hydrate/mv/trash/prefetch),
+     * so a poller (the GUI file browser) can tell exactly when a file's status
+     * may have changed without diffing the per-file listing. Never decreases
+     * within a process; a fresh process restarts it at 0.
+     */
+    revision: number;
     lastPassAt: string | null;
     lastPassMs: number;
     lastError: string | null;
@@ -53,6 +61,7 @@ export interface StatusShape {
 export const status: StatusShape = {
     pid: process.pid,
     state: 'starting',
+    revision: 0,
     lastPassAt: null,
     lastPassMs: 0,
     lastError: null,
@@ -73,6 +82,19 @@ export function setStatus(patch: Partial<StatusShape>): void {
     } catch {
         /* status is best-effort */
     }
+}
+
+/**
+ * Advance the "sync facts changed" counter.
+ *
+ * Only increments the in-memory status; the caller's following `setStatus`
+ * persists it in the same write (single writer, no lock needed). Call this
+ * immediately before a `setStatus` that marks a point where a file's status may
+ * have changed (end of a pass, after a mutating RPC) so the GUI can refresh the
+ * visible folder on change instead of only on navigation.
+ */
+export function bumpRevision(): void {
+    status.revision += 1;
 }
 
 type Level = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';

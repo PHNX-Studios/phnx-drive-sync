@@ -12,8 +12,27 @@ export interface PinResult {
     note?: string;
 }
 
+/** Whether a file's bytes are on this device (`local`) or only remote (`online`). */
+export type EntryPresence = 'local' | 'online';
+/** Sync state of a file relative to the baseline (`n/a` for folders). */
+export type EntrySync = 'clean' | 'dirty' | 'unsynced' | 'n/a';
+
+/** One directory entry for the GUI file browser (status only; the engine owns the semantics). */
+export interface ListEntry {
+    /** Path relative to the sync root ('' is the root itself). */
+    path: string;
+    name: string;
+    type: 'file' | 'dir';
+    presence: EntryPresence;
+    sync: EntrySync;
+    /** keep-on-this-device mark (`pinned` table) */
+    pinned: boolean;
+    size: number | null;
+    mtime: number | null;
+}
+
 export interface RpcRequest {
-    op: 'pin' | 'unpin' | 'hydrate' | 'mv' | 'trash' | 'evict' | 'prefetch';
+    op: 'pin' | 'unpin' | 'hydrate' | 'mv' | 'trash' | 'evict' | 'prefetch' | 'list' | 'sync';
     paths: string[];
 }
 
@@ -21,6 +40,8 @@ export interface RpcResponse {
     ok: boolean;
     error?: string;
     results?: PinResult[];
+    /** `list` only: per-entry status of one directory. */
+    entries?: ListEntry[];
     placeholders?: number;
 }
 
@@ -32,10 +53,39 @@ export interface RpcHandlers {
     trash: (paths: string[]) => Promise<PinResult[]>;
     evict: (paths: string[]) => Promise<PinResult[]>;
     prefetch: (paths: string[]) => Promise<PinResult[]>;
+    /** Read-only: per-entry status under a directory ('' = sync root). */
+    list: (paths: string[]) => Promise<ListEntry[]>;
+    /** Trigger an incremental pass (the GUI "Sync now"); no paths. */
+    sync: (paths: string[]) => Promise<PinResult[]>;
 }
 
-/** null = any non-empty path list; number = exact arity (mv = [from, to]). */
-const OP_ARITY: Record<RpcRequest['op'], number | null> = { pin: null, unpin: null, hydrate: 1, mv: 2, trash: 1, evict: null, prefetch: 1 };
+/** null = any non-empty path list; number = exact arity (mv = [from, to]; sync = none). */
+const OP_ARITY: Record<RpcRequest['op'], number | null> = {
+    pin: null,
+    unpin: null,
+    hydrate: 1,
+    mv: 2,
+    trash: 1,
+    evict: null,
+    prefetch: 1,
+    list: 1,
+    sync: 0,
+};
+
+/**
+ * Per-op path validation.
+ *
+ * - `sync` takes no paths at all.
+ * - `list` takes exactly one directory path and allows '' (the sync root).
+ * - everything else takes one or more non-empty, traversal-free relative paths.
+ */
+function pathsOk(op: RpcRequest['op'], arity: number | null, paths: unknown): paths is string[] {
+    if (!Array.isArray(paths) || !paths.every((p) => typeof p === 'string')) return false;
+    if (arity === 0) return paths.length === 0;
+    if (op === 'list') return paths.length === 1 && !paths[0].startsWith('/') && !paths[0].split('/').includes('..');
+    if (arity !== null && paths.length !== arity) return false;
+    return paths.length > 0 && paths.every((p) => p !== '' && !p.split('/').includes('..'));
+}
 
 let server: Server | null = null;
 
@@ -87,14 +137,10 @@ async function dispatch(line: string, handlers: RpcHandlers, sock: Socket): Prom
     try {
         const req = JSON.parse(line) as RpcRequest;
         const arity = OP_ARITY[req.op];
-        const pathsOk =
-            arity !== undefined &&
-            Array.isArray(req.paths) &&
-            req.paths.length > 0 &&
-            (arity === null || req.paths.length === arity) &&
-            req.paths.every((p) => typeof p === 'string' && p !== '' && !p.split('/').includes('..'));
-        if (!pathsOk) {
+        if (arity === undefined || !pathsOk(req.op, arity, req.paths)) {
             resp = { ok: false, error: 'malformed request' };
+        } else if (req.op === 'list') {
+            resp = { ok: true, entries: await handlers.list(req.paths) };
         } else {
             const results = await handlers[req.op](req.paths);
             resp = { ok: true, results, placeholders: st.onlineCount() };
@@ -171,13 +217,13 @@ export async function rpcClient(op: 'pin' | 'unpin' | 'evict' | 'prefetch', rawP
     if (op === 'prefetch') {
         const v = (rawPaths[0] ?? '').toLowerCase();
         if (!['on', 'off', 'status'].includes(v) || rawPaths.length > 1) {
-            console.error('usage: drive-sync prefetch on|off|status');
+            console.error('usage: phnx-drive-sync prefetch on|off|status');
             return 64;
         }
         rels = [v];
     } else if (rawPaths.length === 0) {
         if (op !== 'evict') {
-            console.error(`usage: drive-sync ${op} <path>...`);
+            console.error(`usage: phnx-drive-sync ${op} <path>...`);
             return 64;
         }
         rels = ['*']; // evict without paths = every reclaimable file (bulk "Free up space")
@@ -185,7 +231,7 @@ export async function rpcClient(op: 'pin' | 'unpin' | 'evict' | 'prefetch', rawP
         try {
             rels = [...new Set(rawPaths.map(toRel))];
         } catch (e) {
-            console.error(`drive-sync: ${e instanceof Error ? e.message : String(e)}`);
+            console.error(`phnx-drive-sync: ${e instanceof Error ? e.message : String(e)}`);
             return 64;
         }
     }
@@ -193,11 +239,11 @@ export async function rpcClient(op: 'pin' | 'unpin' | 'evict' | 'prefetch', rawP
     try {
         resp = await call({ op, paths: rels }, 30 * 60_000);
     } catch (e) {
-        console.error(`drive-sync: ${e instanceof Error ? e.message : String(e)}`);
+        console.error(`phnx-drive-sync: ${e instanceof Error ? e.message : String(e)}`);
         return 1;
     }
     if (!resp.ok) {
-        console.error(`drive-sync: ${resp.error ?? 'request failed'}`);
+        console.error(`phnx-drive-sync: ${resp.error ?? 'request failed'}`);
         return 1;
     }
     let failed = 0;

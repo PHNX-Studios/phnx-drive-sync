@@ -30,7 +30,8 @@ binaries (Bun runtime + all dependencies embedded, glibc 2.17+), and the
 installer wires up systemd user units, autostart, icons and the Nautilus
 context menu. Everything lands under `~/.local`; the only elevated step is
 installing a small set of host packages (fuse3, python3, GTK/AppIndicator,
-inotify-tools, gvfs, libnotify, gnome-keyring) via your package manager. When it
+inotify-tools, gvfs, libnotify, gnome-keyring, and GTK4/Libadwaita for the file
+manager GUI) via your package manager. When it
 cannot elevate (no sudo, an unknown distro, or `--no-system-deps`), the two host
 pieces that matter most are fetched into `~/.local` without root: `inotify-tools`
 (the fast file watcher) and the Ayatana AppIndicator typelib (the tray icon).
@@ -57,7 +58,10 @@ via a systemd user timer), and `--force` (reinstall the same version).
 
 Upgrades are handled by re-running a newer tarball's installer: it refuses to
 downgrade, no-ops on the same version, and preserves all state under
-`~/.local/share/drive-sync` and `~/.local/state/drive-sync`.
+`~/.local/share/phnx-drive-sync` and `~/.local/state/phnx-drive-sync`. Upgrading
+from the older `drive-sync` layout migrates those directories in place (baseline,
+placeholder and keep marks, the real tree and the SDK cache move with them), so
+nothing is re-downloaded.
 
 `phnx-drive-sync update` trusts the configured release host over TLS and
 verifies the tarball's SHA-256 from the release manifest before running the
@@ -95,6 +99,31 @@ recursively over their files (folders themselves always stay on disk).
 sync pass first and re-check; exit 2 means some paths failed (per-path detail on
 stdout/stderr).
 
+File manager GUI (full file management over the same mount):
+
+```sh
+phnx-drive-sync-gui          # GTK4 + Libadwaita window; also in the app menu
+```
+
+A file browser over `~/Proton Drive` that shows each entry's sync state as a
+badge (cloud = online-only, green check = on this device, amber = pending) and
+offers open, **Keep on this device** (pin), **Free up space** for the selection
+(unpin) or everything local (bulk evict), new folder, rename, move to trash,
+**Sync now**, a recall-on-hover toggle and an editor for `.protonignore`.
+Right-click any file or folder for a context menu that adapts to the selection
+(Open, Keep on this device, Free up space, Rename, Move to trash); right-click
+empty space for New folder, Sync now, Free up space for all local files and the
+filters editor. Engine-backed items are hidden while the service is stopped. It
+talks to the mount for file operations (so placeholder recall, metadata-only
+renames and remote trash all apply automatically) and to the running engine over
+`rpc.sock` for status and sync control; with the engine stopped it shows a
+"start the service" page instead. The list updates live, not only on navigation:
+the GUI watches `status.json`'s `revision` and re-reads the visible folder
+whenever a pass or an action changes file status, repainting each badge in place
+(selection and scroll position are preserved); during a long pass it also
+re-reads at a short cadence so files settle as they sync. Requires GTK4 + Libadwaita
+(`gir1.2-gtk-4.0`, `gir1.2-adw-1`), installed by `install.sh`.
+
 systemd (user): the installer enables and starts the units. To drive them by hand:
 
 ```sh
@@ -120,13 +149,15 @@ it automatically within seconds (see `mount` in `status.json`); the tray's
 Tray icon (live status, storage, controls — autostarted):
 
 ```sh
-tray/phnx-drive-sync-tray.py   # 2x2 status grid, Actions submenu, Pause/Resume
+tray/phnx-drive-sync-tray.py   # 2x2 status grid, top-level actions, Pause/Resume
 ```
 
 The menu shows a 2x2 status grid (sync status | storage, online-only |
-reclaimable) followed by an **Actions** submenu (Sync now, Open folder, Show
-last log, Free up space) and Pause/Resume + Quit. While a pass runs the status
-cell tracks the current item and its `(done/total)` progress.
+reclaimable) followed by top-level action items - **Sync now**, **Open PHNX
+Drive Sync** (the file manager GUI), **Open Proton Drive folder**, **Show last
+log** and **Free up space** (revealed when something is reclaimable) - then
+Pause/Resume + Quit. There are no submenus. While a pass runs the status cell
+tracks the current item and its `(done/total)` progress.
 
 - **Sync now** sends the daemon `SIGUSR1` (runs an immediate incremental pass,
   ~0.5 s) or starts the unit if paused.
@@ -167,7 +198,7 @@ are recoverable there).
 ## Files on demand (selective sync)
 
 `~/Proton Drive` is a FUSE mount (pyfuse3 sidecar) over the real tree at
-`~/.local/share/drive-sync/tree`. Every synced path is always visible with its
+`~/.local/share/phnx-drive-sync/tree`. Every synced path is always visible with its
 real size; online-only files cost no disk (`du` ≈ 0, `blocks=0`). Reads never
 see zero-fill: reading a placeholder blocks, downloads the content from the
 baseline (byte-identical) and materializes the file — OneDrive recall
@@ -225,9 +256,9 @@ modes degrade quietly: `gio` missing → logged once, badges skipped; mount
 down → missing paths deferred until the next pass.
 
 Sidecar requirements: `python3`, `fusermount3`/`libfuse3`, and `pyfuse3`,
-`trio`, `cffi` importable with `PYTHONPATH=~/.local/share/drive-sync/python`.
+`trio`, `cffi` importable with `PYTHONPATH=~/.local/share/phnx-drive-sync/python`.
 `./install.sh` installs these for you (distro packages where available, falling
-back to `pip install --target ~/.local/share/drive-sync/python`). The engine
+back to `pip install --target ~/.local/share/phnx-drive-sync/python`). The engine
 probes the import at startup; if it fails the engine still runs — the mount
 point stays empty and the tray shows "Mount degraded".
 
@@ -265,21 +296,25 @@ to disappear from Proton Drive.
 | What | Where |
 |---|---|
 | user-facing mount point (FUSE) | `~/Proton Drive` |
-| real tree (scan/watch/execute/filters) | `~/.local/share/drive-sync/tree` |
-| baseline + remote cache (sqlite) | `~/.local/share/drive-sync/state.db` |
+| real tree (scan/watch/execute/filters) | `~/.local/share/phnx-drive-sync/tree` |
+| baseline + remote cache (sqlite) | `~/.local/share/phnx-drive-sync/state.db` |
 | online-only markers (`online` table) | same db (dropped with their baseline row) |
 | keep-on-this-device marks (`pinned` table) | same db (survive recall; dropped with their baseline row) |
-| SDK node/crypto cache | `~/.local/share/drive-sync/proton-cache/` |
-| sidecar python libs (pyfuse3/trio/cffi) | `~/.local/share/drive-sync/python/` |
-| log + `status.json` | `~/.local/state/drive-sync/` |
-| daemon pid lock | `~/.local/state/drive-sync/daemon.lock` (stale-aware) |
-| pin/unpin rpc socket | `~/.local/state/drive-sync/rpc.sock` (unlinked at boot/shutdown) |
-| sidecar heartbeat (tray mount check) | `~/.local/state/drive-sync/mount-ok` |
+| SDK node/crypto cache | `~/.local/share/phnx-drive-sync/proton-cache/` |
+| sidecar python libs (pyfuse3/trio/cffi) | `~/.local/share/phnx-drive-sync/python/` |
+| log + `status.json` | `~/.local/state/phnx-drive-sync/` |
+| daemon pid lock | `~/.local/state/phnx-drive-sync/daemon.lock` (stale-aware) |
+| pin/unpin rpc socket | `~/.local/state/phnx-drive-sync/rpc.sock` (unlinked at boot/shutdown) |
+| sidecar heartbeat (tray mount check) | `~/.local/state/phnx-drive-sync/mount-ok` |
 | tray icon + icons | `~/.local/lib/phnx-drive-sync/tray/` (launcher: `~/.local/bin/phnx-drive-sync-tray`; autostart: `~/.config/autostart/phnx-drive-sync-tray.desktop`) |
-| installed runtime (internal disk) | `~/.local/lib/phnx-drive-sync/` (compiled engine + bundled login CLI + sidecar/tray; installed from the release tarball) |
+| file manager GUI | `~/.local/lib/phnx-drive-sync/gui/` (launcher: `~/.local/bin/phnx-drive-sync-gui`; app entry: `~/.local/share/applications/phnx-drive-sync-gui.desktop`) |
+| installed runtime (internal disk) | `~/.local/lib/phnx-drive-sync/` (compiled engine + bundled login CLI + sidecar/tray/gui; installed from the release tarball) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
-last pass info, error counts, the recall-on-hover `prefetch` toggle, and
+last pass info, a monotonic `revision` that advances whenever a pass or a
+mutating RPC may have changed file status (the file manager GUI watches it to
+refresh the visible folder live), error counts, the recall-on-hover `prefetch`
+toggle, and
 `counts: {…, placeholders, reclaimable}` (placeholder count and the bytes a
 bulk free could still reclaim — what the tray storage line shows), plus
 `storage: {used, max, driveUsed, fetchedAt}` (account quota from
@@ -335,8 +370,11 @@ interval — re-login with the official CLI:
 ```sh
 bun run deps                        # install vendored dependency trees (cli + SDK + account SDK)
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
-bun test test/                      # classify/placeholder/evict unit tests (temp state)
+bun test test/                      # classify/placeholder/evict/listing unit tests (temp state)
 ./phnx-drive-sync.sh once --dry-run      # classify without changing anything
+xvfb-run -a python3 -m unittest discover -s test/gui  # GUI unit tests (widget tests need a display)
+xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check  # headless GUI smoke
+ruff check .                        # lint the Python GUI, tray and tests
 bash packaging/build.sh             # build the portable release tarball into dist/
 ```
 

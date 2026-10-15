@@ -1,0 +1,22 @@
+# Python tooling configuration for the GUI (gui/), the tray and their tests.
+# The application itself is dependency-free beyond PyGObject (system).
+
+[tool.ruff]
+line-length = 140
+target-version = "py38"
+
+[tool.ruff.lint]
+# pycodestyle errors + pyflakes; formatting-only rules stay out of the way.
+select = ["E4", "E7", "E9", "F", "W"]
+ignore = ["E501", "W291", "W293"]
+
+[tool.ruff.lint.per-file-ignores]
+# Import-after-code is required where a version is chosen or sys.path is adjusted
+# before the real imports: gi.require_version() has to precede gi.repository in
+# the GTK modules and the tray, and the tests and the GUI entry insert sys.path
+# first (dev + installed layouts). E402 stays enabled for the rest of the tree,
+# so a misplaced import in plain Python (e.g. python/sidecar.py) is still caught.
+"test/**" = ["E402"]
+"gui/phnx-drive-sync-gui.py" = ["E402"]
+"gui/phnxdgui/*.py" = ["E402"]
+"tray/*.py" = ["E402"]

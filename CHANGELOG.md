@@ -6,6 +6,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-15
+
+### Fixed
+
+- File manager GUI context menu: the item actions (Keep on this device, Free up
+  space, Open, Rename, Move to trash and the background actions) now reliably
+  fire. The menu is rendered from real buttons that activate the window's `win.*`
+  actions directly, instead of a `Gtk.PopoverMenu` model whose actions a popover
+  parented to a `Gtk.ColumnView` cell did not always resolve.
+
+## [0.3.1] - 2026-10-15
+
+### Changed
+
+- File manager GUI live status: each entry's status badge (and size/mtime) now
+  repaints in place whenever the engine reports a change, instead of only when
+  the user navigates or acts through the GUI. The engine publishes a monotonic
+  `revision` in `status.json`, bumped at the end of every pass and after every
+  mutating RPC; the GUI watches it and re-reads the visible folder, preserving
+  the selection and scroll position. During a long pass it also re-reads at a
+  short cadence so files settle as they sync.
+
+## [0.3.0] - 2026-10-15
+
+### Added
+
+- File manager GUI (`phnx-drive-sync-gui`): a GTK4 + Libadwaita window over the
+  `~/Proton Drive` mount with per-file sync status (online-only, on this device,
+  pending), folder navigation, open, keep-on-this-device, free up space
+  (selection and all-local-files), new folder, rename, move to trash, Sync now,
+  a recall-on-hover toggle and an ignore-filters editor.
+- File manager GUI right-click context menu for files and folders: Open, Keep on
+  this device, Free up space, Rename and Move to trash, plus a background menu
+  (New folder, Sync now, Free up space for all local files, Edit ignore filters).
+  Items adapt to the selection and engine-dependent items are hidden while the
+  sync engine is stopped.
+- Engine RPC `list` (read-only per-directory status for the GUI) and `sync`
+  (trigger an incremental pass without depending on systemd/SIGUSR1).
+
+### Changed
+
+- `install.sh` installs GTK4 + Libadwaita and the GUI launcher and desktop entry.
+- Tray menu: all actions are now top level (the Actions submenu is gone), with a
+  new **Open PHNX Drive Sync** item that launches the file manager GUI alongside
+  **Sync now**, Open folder, Show last log and Free up space.
+- State and data now live under `phnx-drive-sync` (`~/.local/share/phnx-drive-sync`,
+  `~/.local/state/phnx-drive-sync`), matching the app/lib/config/unit names.
+  Existing `drive-sync` directories are migrated in place on upgrade, so the
+  baseline, placeholders, keep-marks, real tree and SDK cache carry over.
+
 ## [0.2.0] - 2026-10-14
 
 First public release.
@@ -41,5 +91,8 @@ First public release.
 - `package.json` is no longer private and uses the vendored TypeScript for
   `typecheck`.
 
-[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/PHNX-Studios/phnx-drive-sync/releases/tag/v0.2.0
