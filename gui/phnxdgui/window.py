@@ -7,9 +7,14 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
-from . import dialogs, paths, rpcclient, util
+from . import dialogs, paths, rpcclient, statewatch, util
 from .filebrowser import FileBrowser
 from .statewatch import StateWatch
+
+# While a pass is in flight the revision does not advance until it ends, so a
+# folder being synced file by file would look frozen. Re-read it at this cadence
+# (seconds) so badges settle live during long walks.
+LIVE_REFRESH_S = 1.5
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -21,6 +26,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._status = {}
         self._engine_down = False
         self._context_popover = None
+        self._last_sync_version = None
+        self._pass_timer = None
 
         self._browser = FileBrowser(self)
         self._build_ui()
@@ -243,6 +250,37 @@ class MainWindow(Adw.ApplicationWindow):
         if available and self._engine_down:
             self._engine_down = False
             self._browser.refresh()
+        self._maybe_live_refresh(self._status)
+
+    def _maybe_live_refresh(self, status):
+        """Re-read the visible folder when the engine reports changed sync facts.
+
+        ``revision`` advances on every completed pass and every mutating RPC, so
+        a file's badge repaints without the user navigating. During a long full
+        walk the revision does not move until the end, so a faster pass-time
+        timer keeps a progressively-synced folder current.
+        """
+        if self._closing or self._engine_down:
+            return
+        version = statewatch.sync_version(status)
+        if version is not None and version != self._last_sync_version:
+            self._last_sync_version = version
+            self._browser.refresh()
+        if status.get("state") == "passing":
+            self._ensure_pass_refresh()
+
+    def _ensure_pass_refresh(self):
+        if self._pass_timer is not None or self._closing:
+            return
+        self._pass_timer = GLib.timeout_add(int(LIVE_REFRESH_S * 1000), self._pass_refresh_tick)
+
+    def _pass_refresh_tick(self):
+        """Re-read the folder at the pass cadence; stop once the pass ends."""
+        if self._closing or self._engine_down or self._status.get("state") != "passing":
+            self._pass_timer = None
+            return GLib.SOURCE_REMOVE
+        self._browser.refresh()
+        return GLib.SOURCE_CONTINUE
 
     def _update_storage_line(self, status):
         storage = status.get("storage") or {}
@@ -375,5 +413,8 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_close_request(self, _window):
         self._closing = True
         self._statewatch.stop()
+        if self._pass_timer is not None:
+            GLib.source_remove(self._pass_timer)
+            self._pass_timer = None
         self._browser.close()
         return False

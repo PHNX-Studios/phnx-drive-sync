@@ -12,7 +12,7 @@ body:
     attributes:
       label: PHNX Drive Sync version
       description: Output of `phnx-drive-sync version`
-      placeholder: "0.3.0"
+      placeholder: "0.3.2"
     validations:
       required: true
   - type: dropdown

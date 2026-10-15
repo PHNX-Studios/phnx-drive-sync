@@ -2,13 +2,16 @@
 
 The pure part (``SelectionContext`` / ``context_for`` / ``menu_spec_for``) has no
 GTK dependency, so it is unit-testable without a display, mirroring ``badges.py``.
-The GTK glue (``build_menu`` / ``present``) imports Gtk lazily and renders a
-``Gtk.PopoverMenu`` from the same spec.
+The GTK glue (``present``) imports Gtk lazily and renders one ``Gtk.Button`` per
+spec item inside a ``Gtk.Popover``; each button activates the window's matching
+``win.*`` action directly, so the context menu and the header menu drive identical
+code paths (no duplicated file logic). Items that do not apply are omitted rather
+than greyed out: hiding reads better in a context menu.
 
-Menu items reference the window's existing ``win.*`` actions, so the context menu
-and the header menu drive identical code paths (no duplicated file logic). Items
-that do not apply are omitted rather than greyed out: GMenu has no per-item
-enabled flag, and hiding reads better in a context menu.
+Driving the buttons through ``window.activate_action`` (instead of a
+``Gio.Menu`` model resolved by ``Gtk.PopoverMenu``) matters: a popover parented to
+a ``Gtk.ColumnView`` cell does not reliably reach the window's action group on
+every backend, which left the menu visible but inert when an item was clicked.
 """
 
 from dataclasses import dataclass
@@ -87,19 +90,6 @@ def _background_spec(ctx: SelectionContext) -> list:
 
 # --- GTK glue ---------------------------------------------------------------
 
-def build_menu(spec: list):
-    """Turn a menu spec into a Gio.Menu (one section per inner list)."""
-    from gi.repository import Gio
-
-    menu = Gio.Menu()
-    for section_items in spec:
-        section = Gio.Menu()
-        for label, action in section_items:
-            section.append(label, action)
-        menu.append_section(None, section)
-    return menu
-
-
 def _on_popover_closed(popover) -> None:
     # GTK4 does not unparent a popover automatically on dismiss.
     popover.unparent()
@@ -108,9 +98,16 @@ def _on_popover_closed(popover) -> None:
 def present(window, widget, x, y, ctx: SelectionContext) -> None:
     """Build and pop up the context menu at (x, y) in ``widget`` coordinates.
 
-    ``window`` is the MainWindow (used to keep the popover referenced and to
-    resolve the ``win.*`` action group through the widget ancestry), ``widget``
-    is the cell/widget the click landed on.
+    The items are plain ``Gtk.Button``s activated through ``window.activate_action``
+    rather than a ``Gio.Menu`` model resolved by ``Gtk.PopoverMenu``. A popover
+    parented to a ``Gtk.ColumnView`` cell does not reliably resolve the window's
+    ``win.*`` action group on every backend, which made the menu appear but do
+    nothing when an item was clicked; driving the exact same ``win.*`` actions
+    directly from the button guarantees they fire (and keeps a single code path
+    with the header menu and the accelerators).
+
+    ``widget`` is the cell/widget the click landed on; ``window`` is the
+    MainWindow (used to activate the action and to keep the popover referenced).
     """
     spec = menu_spec_for(ctx)
     if not spec:
@@ -122,7 +119,17 @@ def present(window, widget, x, y, ctx: SelectionContext) -> None:
     if previous is not None:
         previous.popdown()
 
-    popover = Gtk.PopoverMenu.new_from_model(build_menu(spec))
+    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    content.add_css_class("menu")
+    for index, section_items in enumerate(spec):
+        if index:
+            content.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        for label, action in section_items:
+            content.append(_menu_item(window, label, action))
+
+    popover = Gtk.Popover()
+    popover.add_css_class("menu")
+    popover.set_child(content)
     popover.set_parent(widget)
     popover.set_has_arrow(False)
     rect = Gdk.Rectangle()
@@ -134,6 +141,30 @@ def present(window, widget, x, y, ctx: SelectionContext) -> None:
     popover.connect("closed", _on_popover_closed)
     popover.popup()
 
-    # Keep a strong reference: an unreferenced PopoverMenu can be garbage
-    # collected before the user interacts with it.
+    # Keep a strong reference: an unreferenced popover can be garbage collected
+    # before the user interacts with it.
     window._context_popover = popover
+
+
+def _menu_item(window, label, action):
+    from gi.repository import Gtk
+
+    button = Gtk.Button(label=label)
+    button.set_has_frame(False)
+    button.set_halign(Gtk.Align.FILL)
+    button.set_focus_on_click(False)
+    button.add_css_class("flat")
+    child = button.get_child()
+    if isinstance(child, Gtk.Label):
+        child.set_xalign(0)
+        child.set_margin_start(6)
+        child.set_margin_end(12)
+    button.connect("clicked", _activate_from_button, window, action)
+    return button
+
+
+def _activate_from_button(_button, window, action) -> None:
+    popover = getattr(window, "_context_popover", None)
+    if popover is not None:
+        popover.popdown()
+    window.activate_action(action, None)

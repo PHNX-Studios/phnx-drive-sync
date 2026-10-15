@@ -7,7 +7,7 @@ import { legacyShareDir, legacyStateDir, lockFile, localRoot, prefetchDefault, s
 import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
-import { log, setStatus, status } from './log';
+import { bumpRevision, log, setStatus, status } from './log';
 import { isMountPoint, monitorMount, mountOkPath, startMount, stopMount } from './mount';
 import * as remote from './remote';
 import { rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc';
@@ -613,6 +613,9 @@ async function daemon(): Promise<void> {
 
     const afterRpc = (): void => {
         kickEmblems();
+        // Every mutating RPC can change a file's status (pin/unpin/evict/hydrate/
+        // mv/trash): advance the revision so the GUI refreshes the visible folder.
+        bumpRevision();
         setStatus({
             prefetch: prefetchEffective(),
             counts: { ...status.counts, placeholders: st.onlineCount(), reclaimable: st.reclaimableBytes() },

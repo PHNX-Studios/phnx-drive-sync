@@ -33,6 +33,32 @@ def mount_age_s() -> float:
         return float("inf")
 
 
+def sync_version(status):
+    """A comparable "sync facts changed" signal, or None when unknown.
+
+    Prefers the engine's monotonic ``revision`` (bumped at the end of every pass
+    and after every mutating RPC): a change there means some file's status may
+    have changed, so the visible folder should be re-read. Falls back to a
+    fingerprint of the status fields that change when sync facts change, for an
+    older engine that predates ``revision``. A ``None`` return means there is
+    nothing to compare yet (engine not up), so the caller must not refresh.
+
+    Pure and GTK-free so it is unit-testable without a display.
+    """
+    if not isinstance(status, dict) or not status:
+        return None
+    if "revision" in status:
+        return ("rev", status.get("revision"))
+    counts = status.get("counts") or {}
+    return (
+        status.get("lastPassAt"),
+        counts.get("placeholders"),
+        counts.get("reclaimable"),
+        counts.get("tracked"),
+        status.get("pid"),
+    )
+
+
 class StateWatch:
     """Periodic status.json poll; calls on_update(status_dict, mount_age_s)."""
 

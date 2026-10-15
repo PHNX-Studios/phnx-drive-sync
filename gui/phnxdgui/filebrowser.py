@@ -4,6 +4,11 @@ The listing comes from the engine's ``list`` RPC (the engine owns sync status);
 file operations go through the FUSE mount with GIO, so the sidecar's placeholder
 semantics (hydrate on open, remote-only rename/trash) apply automatically. Slow
 operations run on worker threads and report back on the GTK main loop.
+
+A refresh merges the new listing into the existing store in place (rows that
+persist are updated through ``FileRow.apply_entry``) instead of rebuilding it, so
+a live status change repaints only the affected cells and leaves the selection
+and the scroll position untouched.
 """
 
 import os
@@ -93,25 +98,29 @@ class FileBrowser:
     # --- construction -------------------------------------------------------
 
     def _build_columns(self):
+        self._name_sorter = Gtk.CustomSorter.new(compare_name, None)
         name_col = Gtk.ColumnViewColumn(title="Name", factory=self._name_factory())
         name_col.set_expand(True)
         name_col.set_resizable(True)
-        name_col.set_sorter(Gtk.CustomSorter.new(compare_name, None))
+        name_col.set_sorter(self._name_sorter)
         self.column_view.append_column(name_col)
 
-        size_col = Gtk.ColumnViewColumn(title="Size", factory=self._label_factory(self._bind_size))
+        self._size_sorter = Gtk.CustomSorter.new(compare_size, None)
+        size_col = Gtk.ColumnViewColumn(title="Size", factory=self._label_factory(self._render_size))
         size_col.set_resizable(True)
-        size_col.set_sorter(Gtk.CustomSorter.new(compare_size, None))
+        size_col.set_sorter(self._size_sorter)
         self.column_view.append_column(size_col)
 
-        mtime_col = Gtk.ColumnViewColumn(title="Modified", factory=self._label_factory(self._bind_mtime))
+        self._mtime_sorter = Gtk.CustomSorter.new(compare_mtime, None)
+        mtime_col = Gtk.ColumnViewColumn(title="Modified", factory=self._label_factory(self._render_mtime))
         mtime_col.set_resizable(True)
-        mtime_col.set_sorter(Gtk.CustomSorter.new(compare_mtime, None))
+        mtime_col.set_sorter(self._mtime_sorter)
         self.column_view.append_column(mtime_col)
 
-        status_col = Gtk.ColumnViewColumn(title="Sync", factory=self._label_factory(self._bind_status))
+        self._status_sorter = Gtk.CustomSorter.new(compare_status, None)
+        status_col = Gtk.ColumnViewColumn(title="Sync", factory=self._label_factory(self._render_status))
         status_col.set_resizable(True)
-        status_col.set_sorter(Gtk.CustomSorter.new(compare_status, None))
+        status_col.set_sorter(self._status_sorter)
         self.column_view.append_column(status_col)
 
         self.column_view.sort_by_column(name_col, Gtk.SortType.ASCENDING)
@@ -120,12 +129,14 @@ class FileBrowser:
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._name_setup)
         factory.connect("bind", self._name_bind)
+        factory.connect("unbind", self._name_unbind)
         return factory
 
-    def _label_factory(self, bind_func):
+    def _label_factory(self, render):
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._label_setup)
-        factory.connect("bind", bind_func)
+        factory.connect("bind", lambda _factory, item: self._label_bind(item, render))
+        factory.connect("unbind", self._label_unbind)
         return factory
 
     def _name_setup(self, _factory, item):
@@ -139,8 +150,48 @@ class FileBrowser:
         self._attach_row_gesture(item, box)
 
     def _name_bind(self, _factory, item):
-        row = item.get_item()
         box = item.get_child()
+        row = item.get_item()
+        self._render_name(box, row)
+        self._track(item, row, lambda r: self._render_name(box, r))
+
+    def _name_unbind(self, _factory, item):
+        self._untrack(item)
+
+    def _label_setup(self, _factory, item):
+        label = Gtk.Label(xalign=0)
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        item.set_child(label)
+        self._attach_row_gesture(item, label)
+
+    def _label_bind(self, item, render):
+        label = item.get_child()
+        row = item.get_item()
+        render(label, row)
+        self._track(item, row, lambda r: render(label, r))
+
+    def _label_unbind(self, _factory, item):
+        self._untrack(item)
+
+    def _track(self, item, row, render):
+        """Render a row into its recycled cell and repaint it on later changes.
+
+        The handler id is stored alongside the row on the ListItem so ``unbind``
+        can always disconnect it, even if ``get_item()`` is already cleared.
+        """
+        handler = row.connect("notify::revision", lambda r, _pspec: render(r))
+        item._phnx_bound = (row, handler)
+
+    def _untrack(self, item):
+        bound = getattr(item, "_phnx_bound", None)
+        if bound is not None:
+            row, handler = bound
+            row.disconnect(handler)
+        item._phnx_bound = None
+
+    # --- rendering ----------------------------------------------------------
+
+    def _render_name(self, box, row):
         image = box.get_first_child()
         label = image.get_next_sibling()
         icon = self._resolve_icon(row.badge_icons)
@@ -151,27 +202,15 @@ class FileBrowser:
         label.set_text(row.name)
         self._apply_css(label, row.badge_css)
 
-    def _label_setup(self, _factory, item):
-        label = Gtk.Label(xalign=0)
-        label.set_ellipsize(Pango.EllipsizeMode.END)
-        item.set_child(label)
-        self._attach_row_gesture(item, label)
-
-    def _bind_size(self, _factory, item):
-        row = item.get_item()
-        label = item.get_child()
-        label.set_text(row.size_label)
+    def _render_size(self, label, row):
         label.set_xalign(1)
+        label.set_text(row.size_label)
 
-    def _bind_mtime(self, _factory, item):
-        row = item.get_item()
-        label = item.get_child()
-        label.set_text(row.mtime_label)
+    def _render_mtime(self, label, row):
         label.set_xalign(0)
+        label.set_text(row.mtime_label)
 
-    def _bind_status(self, _factory, item):
-        row = item.get_item()
-        label = item.get_child()
+    def _render_status(self, label, row):
         label.set_text(row.badge_label)
         self._apply_css(label, row.badge_css)
 
@@ -244,10 +283,58 @@ class FileBrowser:
         if self._closing or gen != self._gen:
             return
         entries = resp.get("entries") or []
-        self.store.remove_all()
-        for entry in entries:
-            self.store.append(FileRow(entry))
+        self._reconcile(entries)
         self._window.on_folder_loaded(self.current_rel, entries)
+
+    def _reconcile(self, entries):
+        """Merge a fresh listing into the store in place.
+
+        Rows still present are updated through ``apply_entry`` (badges, size and
+        mtime repaint without disturbing the list), missing rows are removed and
+        new rows are appended (the sorter places them). A different folder simply
+        becomes an all-remove/all-append merge, which is correct for navigation.
+        """
+        by_path = {}
+        for entry in entries:
+            path = entry.get("path", "")
+            if path not in by_path:
+                by_path[path] = entry
+
+        rows_by_path = {}
+        for index in range(self.store.get_n_items()):
+            row = self.store.get_item(index)
+            rows_by_path[row.rel_path] = row
+
+        changed = False
+        for path, entry in by_path.items():
+            row = rows_by_path.get(path)
+            if row is None:
+                self.store.append(FileRow(entry))
+                changed = True
+            elif row.apply_entry(entry):
+                changed = True
+
+        for path, row in rows_by_path.items():
+            if path not in by_path:
+                index = self._index_of(row)
+                if index is not None:
+                    self.store.remove(index)
+                changed = True
+
+        if changed:
+            self._invalidate_sorters()
+
+    def _index_of(self, row):
+        for index in range(self.store.get_n_items()):
+            if self.store.get_item(index) is row:
+                return index
+        return None
+
+    def _invalidate_sorters(self):
+        # A changed badge/size/mtime may reorder the view when that column is the
+        # active sort; tell every sorter the order may have changed.
+        for sorter in (self._name_sorter, self._size_sorter, self._mtime_sorter, self._status_sorter):
+            sorter.changed(Gtk.SorterChange.DIFFERENT)
 
     def _on_list_error(self, exc, gen):
         if self._closing or gen != self._gen:

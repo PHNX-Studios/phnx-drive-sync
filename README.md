@@ -117,7 +117,11 @@ filters editor. Engine-backed items are hidden while the service is stopped. It
 talks to the mount for file operations (so placeholder recall, metadata-only
 renames and remote trash all apply automatically) and to the running engine over
 `rpc.sock` for status and sync control; with the engine stopped it shows a
-"start the service" page instead. Requires GTK4 + Libadwaita
+"start the service" page instead. The list updates live, not only on navigation:
+the GUI watches `status.json`'s `revision` and re-reads the visible folder
+whenever a pass or an action changes file status, repainting each badge in place
+(selection and scroll position are preserved); during a long pass it also
+re-reads at a short cadence so files settle as they sync. Requires GTK4 + Libadwaita
 (`gir1.2-gtk-4.0`, `gir1.2-adw-1`), installed by `install.sh`.
 
 systemd (user): the installer enables and starts the units. To drive them by hand:
@@ -307,7 +311,10 @@ to disappear from Proton Drive.
 | installed runtime (internal disk) | `~/.local/lib/phnx-drive-sync/` (compiled engine + bundled login CLI + sidecar/tray/gui; installed from the release tarball) |
 
 `status.json` carries `state` (`starting|passing|running|idle|stopped|auth-required`),
-last pass info, error counts, the recall-on-hover `prefetch` toggle, and
+last pass info, a monotonic `revision` that advances whenever a pass or a
+mutating RPC may have changed file status (the file manager GUI watches it to
+refresh the visible folder live), error counts, the recall-on-hover `prefetch`
+toggle, and
 `counts: {…, placeholders, reclaimable}` (placeholder count and the bytes a
 bulk free could still reclaim — what the tray storage line shows), plus
 `storage: {used, max, driveUsed, fetchedAt}` (account quota from

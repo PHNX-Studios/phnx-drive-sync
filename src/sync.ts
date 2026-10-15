@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 
 import { modifyWindowMs, newFilesMode, seedAdoptWindowMs, treeRoot } from './config';
-import { log, setStatus } from './log';
+import { bumpRevision, log, setStatus } from './log';
 import * as remote from './remote';
 import * as st from './state';
 import { walkLocal, type LocalNode } from './scan';
@@ -733,6 +733,9 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
     }
     passCount++;
 
+    // A pass may have changed file statuses: advance the revision so the GUI
+    // refreshes the visible folder (the following setStatus persists it).
+    bumpRevision();
     setStatus({
         state: s.authFailed ? 'auth-required' : 'running',
         progress: null,
