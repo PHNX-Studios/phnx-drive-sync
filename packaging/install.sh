@@ -515,9 +515,9 @@ if [ ! -f "$CONFIG_DIR/env" ]; then
 # Defaults are baked into the engine; uncomment to override.
 PROTON_DRIVE_CACHE_DIR=$DATA_HOME/phnx-drive-sync/proton-cache
 PROTON_DRIVE_LOG_LEVEL=WARN
-# DRIVE_SYNC_NEW_FILES=online
-# DRIVE_SYNC_EVICT_FREE_GB=5
-# DRIVE_SYNC_PREFETCH=off
+# PHNX_DRIVE_SYNC_NEW_FILES=online
+# PHNX_DRIVE_SYNC_EVICT_FREE_GB=5
+# PHNX_DRIVE_SYNC_PREFETCH=off
 EOF
 fi
 

@@ -140,7 +140,7 @@ let lastStarveWarnAt = 0;
 
 /**
  * Auto-evict (Phase 3): when the filesystem holding the real tree drops below
- * `DRIVE_SYNC_EVICT_FREE_GB`, free the largest clean, non-keep-marked local files
+ * `PHNX_DRIVE_SYNC_EVICT_FREE_GB`, free the largest clean, non-keep-marked local files
  * until the threshold is cleared, then report via notify-send. Disabled by default.
  */
 export function maybeAutoEvict(busy?: ReadonlySet<string>): EvictOutcome | null {

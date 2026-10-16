@@ -69,7 +69,7 @@ installer (as the ordinary user). The manifest is arch-aware: it carries an
 entry per architecture (`x86_64`, `aarch64`) and the updater picks the one
 matching the running binary. It refuses releases whose `min_glibc`/
 `min_kernel`/`min_python` exceed the host, so an old machine is never handed a
-binary it cannot run. Point it at a mirror with `DRIVE_SYNC_RELEASE_URL` or
+binary it cannot run. Point it at a mirror with `PHNX_DRIVE_SYNC_RELEASE_URL` or
 `update --url <manifest>`.
 
 ## Usage
@@ -226,15 +226,15 @@ any lookup of a placeholder through the mount (hover, preview, directory stat)
 queues a background download instead of waiting for the first open; two
 downloads run in parallel, the rest queue. `prefetch off` (the default)
 recalls only on open. The override lives in `state.db` (`prefetch` meta key);
-without it the sidecar falls back to `DRIVE_SYNC_PREFETCH` (env default).
+without it the sidecar falls back to `PHNX_DRIVE_SYNC_PREFETCH` (env default).
 
-**Auto-evict on low disk (default off).** With `DRIVE_SYNC_EVICT_FREE_GB=<n>`
+**Auto-evict on low disk (default off).** With `PHNX_DRIVE_SYNC_EVICT_FREE_GB=<n>`
 set (e.g. in the systemd unit), every pass checks the free space of the
 filesystem holding the real tree; below the threshold the largest clean,
 non-keep-marked local files are evicted until the threshold clears, and a
 `notify-send` report says what was freed.
 
-**New remote files.** `DRIVE_SYNC_NEW_FILES=online` makes files that first
+**New remote files.** `PHNX_DRIVE_SYNC_NEW_FILES=online` makes files that first
 appear remotely materialize as placeholders instead of downloading (folders
 still materialize). Default `local` = download, as before.
 
@@ -247,7 +247,7 @@ tracks bytes-on-disk only (keep-marked files get the check too). Folders get
 none. The engine applies the diff after every pass and after
 pin/unpin/evict/hydrate RPCs (concurrency 8), remembering the last applied
 badge per path in `state.db` so restarts and no-op passes spawn nothing;
-`DRIVE_SYNC_EMBLEMS=off` disables it entirely. Since Yaru ships no cloud
+`PHNX_DRIVE_SYNC_EMBLEMS=off` disables it entirely. Since Yaru ships no cloud
 emblem, a custom `emblem-cloud.svg` is installed into
 `~/.local/share/icons/hicolor/scalable/emblems/` on first sync (stale theme
 cache invalidated alongside). Nautilus re-reads metadata only on F5 /
@@ -323,26 +323,30 @@ read by the tray icon). While a pass runs, `progress: {current, done, total}`
 names the item in flight (`null` when idle); the tray shows it with an
 `(done/total)` counter under the status line.
 
-Env overrides: `DRIVE_SYNC_ROOT` (mount point), `DRIVE_SYNC_TREE` (real tree
-location), `DRIVE_SYNC_REMOTE` (path under *My files*,
-default: whole drive), `DRIVE_SYNC_HOME` (relocate all state — used for isolated
-tests), `DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `DRIVE_SYNC_NEW_FILES` (`local`|`online`),
-`DRIVE_SYNC_EVICT_FREE_GB` (auto-evict threshold, 0 = off),
-`DRIVE_SYNC_PREFETCH` (sidecar recall-on-hover default, off unless set),
-`DRIVE_SYNC_POLL_MS` (watcher-unhealthy safety poll interval, 0 = off),
-`DRIVE_SYNC_SHUTDOWN_GRACE_MS` (how long shutdown waits for the in-flight file
+Env overrides: `PHNX_DRIVE_SYNC_ROOT` (mount point), `PHNX_DRIVE_SYNC_TREE` (real tree
+location), `PHNX_DRIVE_SYNC_REMOTE` (path under *My files*,
+default: whole drive), `PHNX_DRIVE_SYNC_HOME` (relocate all state — used for isolated
+tests), `PHNX_DRIVE_SYNC_EVENT_IDLE_MS` (20 s), `PHNX_DRIVE_SYNC_NEW_FILES` (`local`|`online`),
+`PHNX_DRIVE_SYNC_EVICT_FREE_GB` (auto-evict threshold, 0 = off),
+`PHNX_DRIVE_SYNC_PREFETCH` (sidecar recall-on-hover default, off unless set),
+`PHNX_DRIVE_SYNC_POLL_MS` (watcher-unhealthy safety poll interval, 0 = off),
+`PHNX_DRIVE_SYNC_SHUTDOWN_GRACE_MS` (how long shutdown waits for the in-flight file
 operation to finish, default 120000; keep the unit's `TimeoutStopSec` above it).
 
 Beyond these, the systemd unit's env file (`~/.config/phnx-drive-sync/env`)
 carries the SDK's `PROTON_DRIVE_CACHE_DIR` and `PROTON_DRIVE_LOG_LEVEL`, and
-`DRIVE_SYNC_LIBDIR` is an internal override for where the shipped resources
+`PHNX_DRIVE_SYNC_LIBDIR` is an internal override for where the shipped resources
 (`python/`, `assets/`, `tray/`) are found (used by the installer and tests).
+Every `PHNX_DRIVE_SYNC_*` name keeps its historical `DRIVE_SYNC_*` spelling as a
+deprecated alias (the canonical name wins); the engine, the FUSE sidecar and the
+GUI all read the canonical name first, so an existing env file or script keeps
+working unchanged.
 
 **Shutdown.** On `SIGTERM`/`SIGINT` the engine stops scheduling passes, asks the
 running pass to stop, and then **finishes the file operation already in flight**
 before unmounting and exiting (the pass stops at the next action boundary, so no
 upload or download is cut mid-transfer). It waits up to
-`DRIVE_SYNC_SHUTDOWN_GRACE_MS` for the pass to unwind; a very large transfer that
+`PHNX_DRIVE_SYNC_SHUTDOWN_GRACE_MS` for the pass to unwind; a very large transfer that
 exceeds that is abandoned safely (downloads use a `.part` temp file and resume,
 uploads re-run) rather than blocking logout forever.
 
@@ -356,7 +360,7 @@ demand. There is no periodic *full* walk.
 The watcher is a fast path, not a guarantee: if `inotifywait` is missing or
 crashes, the event stream is unavailable, or the kernel's inotify watch limit
 truncates coverage, the engine falls back to a low-frequency **safety poll**
-(`DRIVE_SYNC_POLL_MS`, default 2 min) that runs an incremental pass. While the
+(`PHNX_DRIVE_SYNC_POLL_MS`, default 2 min) that runs an incremental pass. While the
 watcher is healthy the poll stays silent. inotify-tools `-r` also watches
 directories created or moved into the tree after startup, so new subtrees are
 covered without a restart.

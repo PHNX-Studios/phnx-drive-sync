@@ -9,7 +9,7 @@ sync baseline (--db, read-only):
   disk cost (st_blocks=0); open() blocks on a hydrate RPC to the engine,
   which downloads into --tree and clears the marker, then the real file is
   served (OneDrive recall semantics: materializes).
-- recall-on-hover/prefetch (default off): when enabled (DRIVE_SYNC_PREFETCH
+- recall-on-hover/prefetch (default off): when enabled (PHNX_DRIVE_SYNC_PREFETCH
   env default, state.db `prefetch` meta key override), lookup() of a
   placeholder queues a background hydrate — any stat/preview of an
   online-only file starts downloading it without blocking the caller.
@@ -260,14 +260,18 @@ async def hydrate(rel: str):
 # ---------------------------------------------------------------- prefetch
 
 def prefetch_enabled() -> bool:
-    """Recall-on-hover toggle: state.db meta override, else DRIVE_SYNC_PREFETCH env default."""
+    """Recall-on-hover toggle: state.db meta override, else the PHNX_DRIVE_SYNC_PREFETCH
+    env default (the legacy DRIVE_SYNC_PREFETCH name still works)."""
     try:
         row = DBCONN.execute("SELECT value FROM meta WHERE key = 'prefetch'").fetchone()
     except sqlite3.Error:
         row = None
     if row is not None:
         return row[0] == 'on'
-    return (os.environ.get('DRIVE_SYNC_PREFETCH') or '').strip().lower() in ('1', 'on', 'true', 'yes')
+    raw = os.environ.get('PHNX_DRIVE_SYNC_PREFETCH')
+    if raw is None:
+        raw = os.environ.get('DRIVE_SYNC_PREFETCH')
+    return (raw or '').strip().lower() in ('1', 'on', 'true', 'yes')
 
 
 def _pump_prefetch():

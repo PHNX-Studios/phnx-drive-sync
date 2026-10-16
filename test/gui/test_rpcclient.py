@@ -54,17 +54,17 @@ class FakeEngine:
 class RpcClient(unittest.TestCase):
     def setUp(self):
         self._home = tempfile.mkdtemp()
-        self._old = os.environ.get("DRIVE_SYNC_HOME")
-        os.environ["DRIVE_SYNC_HOME"] = self._home
+        self._old = os.environ.get("PHNX_DRIVE_SYNC_HOME")
+        os.environ["PHNX_DRIVE_SYNC_HOME"] = self._home
         self._engines = []
 
     def tearDown(self):
         for engine in self._engines:
             engine.close()
         if self._old is None:
-            os.environ.pop("DRIVE_SYNC_HOME", None)
+            os.environ.pop("PHNX_DRIVE_SYNC_HOME", None)
         else:
-            os.environ["DRIVE_SYNC_HOME"] = self._old
+            os.environ["PHNX_DRIVE_SYNC_HOME"] = self._old
         shutil.rmtree(self._home, ignore_errors=True)
 
     def start(self, response: bytes) -> FakeEngine:

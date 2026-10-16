@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Environment overrides move to the `PHNX_DRIVE_SYNC_*` prefix; every historical
+  `DRIVE_SYNC_*` name is kept as a deprecated alias (the canonical name wins),
+  across the engine, the FUSE sidecar, the GUI and the systemd env file, so an
+  existing `~/.config/phnx-drive-sync/env` keeps working unchanged.
+
 ## [0.3.2] - 2026-10-15
 
 ### Fixed

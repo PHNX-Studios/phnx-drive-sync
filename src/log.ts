@@ -41,7 +41,7 @@ export interface StatusShape {
     storage: StorageInfo | null;
     /** current item + item-count progress of the in-flight pass; null when idle */
     progress: SyncProgress | null;
-    /** recall-on-hover/prefetch toggle (state.db meta override, else DRIVE_SYNC_PREFETCH) */
+    /** recall-on-hover/prefetch toggle (state.db meta override, else PHNX_DRIVE_SYNC_PREFETCH) */
     prefetch: boolean;
     /** FUSE mount health: the sidecar can die while the engine keeps running */
     mount: 'ok' | 'degraded';

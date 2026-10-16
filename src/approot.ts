@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
+import { envAlias } from './config';
+
 /**
  * Root directory of the shipped application resources (`python/`, `assets/`,
  * `tray/`). It differs between a dev checkout and an installed, compiled build:
@@ -10,14 +12,15 @@ import path from 'node:path';
  *   `/$bunfs/root`, so the executable's own directory is the anchor.
  * - `bun run src/index.ts` from a checkout: `process.execPath` is the bun
  *   binary, so fall back to the source-tree root (one level above `src/`).
- * - `DRIVE_SYNC_LIBDIR` overrides both (used by the installer and tests).
+ * - `PHNX_DRIVE_SYNC_LIBDIR` (or the legacy `DRIVE_SYNC_LIBDIR`) overrides both
+ *   (used by the installer and tests).
  *
  * The discriminating marker is `python/sidecar.py`, which exists in both the
  * checkout root and the installed libdir, but not next to the bun interpreter.
  */
 function findAppRoot(): string {
     const candidates = [
-        process.env.DRIVE_SYNC_LIBDIR,
+        envAlias('LIBDIR'),
         path.dirname(process.execPath),
         path.resolve(import.meta.dir, '..'),
         import.meta.dir,
