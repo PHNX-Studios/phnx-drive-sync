@@ -31,6 +31,13 @@ bun run deps
 # unit tests (scoped: a bare `bun test` also walks the vendored SDK tests)
 bun test test/
 
+# GUI unit tests and a headless smoke (widget tests need a display)
+xvfb-run -a python3 -m unittest discover -s test/gui
+xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check
+
+# lint the Python GUI, tray and tests
+ruff check .
+
 # classify only, change nothing
 ./phnx-drive-sync.sh once --dry-run
 
