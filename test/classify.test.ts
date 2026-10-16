@@ -103,28 +103,28 @@ describe('classify: online-only (placeholder) files', () => {
     });
 });
 
-describe('classify: DRIVE_SYNC_NEW_FILES (live env read)', () => {
+describe('classify: PHNX_DRIVE_SYNC_NEW_FILES (live env read)', () => {
     const p = 'new/remote.bin';
     const SIZE = 777;
     const MTIME = 1_700_000_100_000;
     const R = new Map([[p, remoteFile('uid-new', SIZE, MTIME)]]);
 
     test('default (local): a new remote file downloads', () => {
-        delete process.env.DRIVE_SYNC_NEW_FILES;
+        delete process.env.PHNX_DRIVE_SYNC_NEW_FILES;
         const { actions, stats } = run(new Map(), R, new Map(), new Map());
         expect(actions).toEqual([{ phase: 'download', p, uid: 'uid-new', size: SIZE, mtimeMs: MTIME }]);
         expect(stats.downloads).toBe(1);
     });
 
     test('online: a new remote file becomes a placeholder', () => {
-        process.env.DRIVE_SYNC_NEW_FILES = 'online';
+        process.env.PHNX_DRIVE_SYNC_NEW_FILES = 'online';
         try {
             const { actions, stats } = run(new Map(), R, new Map(), new Map());
             expect(actions).toEqual([{ phase: 'adoptOnline', p, uid: 'uid-new', size: SIZE, mtimeMs: MTIME }]);
             expect(stats.adopts).toBe(1);
             expect(stats.downloads).toBe(0);
         } finally {
-            delete process.env.DRIVE_SYNC_NEW_FILES;
+            delete process.env.PHNX_DRIVE_SYNC_NEW_FILES;
         }
     });
 });

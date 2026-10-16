@@ -302,7 +302,7 @@ export function classify(
                 if (rIsDir(rn)) {
                     actions.push({ phase: 'mkdirLocal', p });
                 } else if (newFilesMode() === 'online') {
-                    // DRIVE_SYNC_NEW_FILES=online: a remote file with no local history
+                    // PHNX_DRIVE_SYNC_NEW_FILES=online: a remote file with no local history
                     // becomes a placeholder instead of a download (dirs still materialize).
                     actions.push({ phase: 'adoptOnline', p, uid: rn.uid, size: rSize(rn), mtimeMs: rMtime(rn) });
                     s.adopts++;

@@ -1,9 +1,10 @@
 """Filesystem locations for the GUI.
 
 Mirrors the engine's src/config.ts exactly: the same XDG base directories and
-the same DRIVE_SYNC_* overrides, so the GUI and the engine always agree on where
-the mount, the real tree, state.db and status.json live. Nothing here creates
-directories; the engine owns layout.
+the same PHNX_DRIVE_SYNC_* overrides (the legacy DRIVE_SYNC_* names are still
+honored), so the GUI and the engine always agree on where the mount, the real
+tree, state.db and status.json live. Nothing here creates directories; the
+engine owns layout.
 """
 
 import os
@@ -13,8 +14,16 @@ def _home() -> str:
     return os.path.expanduser("~")
 
 
+def _env(suffix: str):
+    """Read a PHNX_DRIVE_SYNC_* override, falling back to the legacy DRIVE_SYNC_* name."""
+    value = os.environ.get("PHNX_DRIVE_SYNC_" + suffix)
+    if value is None:
+        value = os.environ.get("DRIVE_SYNC_" + suffix)
+    return value
+
+
 def _state_dir() -> str:
-    override = os.environ.get("DRIVE_SYNC_HOME")
+    override = _env("HOME")
     if override:
         return os.path.join(override, "state")
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(_home(), ".local", "state")
@@ -22,7 +31,7 @@ def _state_dir() -> str:
 
 
 def _share_dir() -> str:
-    override = os.environ.get("DRIVE_SYNC_HOME")
+    override = _env("HOME")
     if override:
         return os.path.join(override, "share")
     base = os.environ.get("XDG_DATA_HOME") or os.path.join(_home(), ".local", "share")
@@ -31,12 +40,12 @@ def _share_dir() -> str:
 
 def mount_root() -> str:
     """The user-facing FUSE mount point (~/Proton Drive)."""
-    return os.path.abspath(os.environ.get("DRIVE_SYNC_ROOT") or os.path.join(_home(), "Proton Drive"))
+    return os.path.abspath(_env("ROOT") or os.path.join(_home(), "Proton Drive"))
 
 
 def tree_root() -> str:
     """The real on-disk tree the engine scans and watches."""
-    return os.path.abspath(os.environ.get("DRIVE_SYNC_TREE") or os.path.join(_share_dir(), "tree"))
+    return os.path.abspath(_env("TREE") or os.path.join(_share_dir(), "tree"))
 
 
 def rpc_socket() -> str:
@@ -62,7 +71,7 @@ def config_dir() -> str:
 
 
 def env_file() -> str:
-    """systemd user unit EnvironmentFile (DRIVE_SYNC_* / PROTON_DRIVE_* overrides)."""
+    """systemd user unit EnvironmentFile (PHNX_DRIVE_SYNC_* / PROTON_DRIVE_* overrides)."""
     return os.path.join(config_dir(), "env")
 
 

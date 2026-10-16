@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-16
+
+### Changed
+
+- Environment overrides move to the `PHNX_DRIVE_SYNC_*` prefix; every historical
+  `DRIVE_SYNC_*` name is kept as a deprecated alias (the canonical name wins),
+  across the engine, the FUSE sidecar, the GUI and the systemd env file, so an
+  existing `~/.config/phnx-drive-sync/env` keeps working unchanged.
+
 ## [0.3.2] - 2026-10-15
 
 ### Fixed
@@ -91,7 +100,8 @@ First public release.
 - `package.json` is no longer private and uses the vendored TypeScript for
   `typecheck`.
 
-[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.2.0...v0.3.0

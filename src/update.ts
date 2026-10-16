@@ -5,6 +5,7 @@ import { release as osRelease, tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { VERSION } from './version';
+import { envAlias } from './config';
 
 /**
  * Self-update: fetch a small release manifest, compare versions, verify the
@@ -15,10 +16,11 @@ import { VERSION } from './version';
  * old host does not depend on a modern `curl`/`wget` or an up-to-date CA store
  * beyond what Bun already provides.
  *
- * `DRIVE_SYNC_RELEASE_URL` overrides the manifest location; `--url <url>` too.
+ * `PHNX_DRIVE_SYNC_RELEASE_URL` (or the legacy `DRIVE_SYNC_RELEASE_URL`)
+ * overrides the manifest location; `--url <url>` too.
  */
 const DEFAULT_MANIFEST_URL =
-    process.env.DRIVE_SYNC_RELEASE_URL ??
+    envAlias('RELEASE_URL') ??
     'https://github.com/PHNX-Studios/phnx-drive-sync/releases/latest/download/latest.json';
 
 export interface ReleaseArtifact {

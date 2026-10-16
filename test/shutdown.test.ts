@@ -100,12 +100,12 @@ describe('execute cooperative stop', () => {
 
 describe('shutdownGraceMs', () => {
     test('defaults to 120000 and honours the env override', () => {
-        delete process.env.DRIVE_SYNC_SHUTDOWN_GRACE_MS;
+        delete process.env.PHNX_DRIVE_SYNC_SHUTDOWN_GRACE_MS;
         expect(shutdownGraceMs()).toBe(120_000);
-        process.env.DRIVE_SYNC_SHUTDOWN_GRACE_MS = '5000';
+        process.env.PHNX_DRIVE_SYNC_SHUTDOWN_GRACE_MS = '5000';
         expect(shutdownGraceMs()).toBe(5000);
-        process.env.DRIVE_SYNC_SHUTDOWN_GRACE_MS = 'nonsense';
+        process.env.PHNX_DRIVE_SYNC_SHUTDOWN_GRACE_MS = 'nonsense';
         expect(shutdownGraceMs()).toBe(120_000);
-        delete process.env.DRIVE_SYNC_SHUTDOWN_GRACE_MS;
+        delete process.env.PHNX_DRIVE_SYNC_SHUTDOWN_GRACE_MS;
     });
 });

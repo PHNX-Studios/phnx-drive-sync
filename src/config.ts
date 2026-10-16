@@ -6,7 +6,17 @@ import path from 'node:path';
 export { APP_VERSION } from './version';
 export const CLIENT_UID_PREFIX = 'syncengine';
 
-const stateHome = process.env.DRIVE_SYNC_HOME;
+/**
+ * Read an environment override. The canonical prefix is `PHNX_DRIVE_SYNC_`; the
+ * historical `DRIVE_SYNC_` names remain as aliases (the new name wins) so an
+ * existing env file or script keeps working across the rename.
+ */
+export function envAlias(suffix: string): string | undefined {
+    const v = process.env[`PHNX_DRIVE_SYNC_${suffix}`];
+    return v !== undefined ? v : process.env[`DRIVE_SYNC_${suffix}`];
+}
+
+const stateHome = envAlias('HOME');
 const dataHome = process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share');
 const stateBase = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
 /** Per-app data/state directory; matches the app, lib, config and unit names. */
@@ -15,10 +25,10 @@ const APP_DIR = 'phnx-drive-sync';
 const LEGACY_APP_DIR = 'drive-sync';
 export const shareDir = stateHome ? path.join(stateHome, 'share') : path.join(dataHome, APP_DIR);
 /** Mount point the user sees (Phase 2: served by the FUSE sidecar). */
-export const localRoot = path.resolve(process.env.DRIVE_SYNC_ROOT || path.join(homedir(), 'Proton Drive'));
+export const localRoot = path.resolve(envAlias('ROOT') || path.join(homedir(), 'Proton Drive'));
 /** Real on-disk tree: what scan/watcher/execute/filters operate on. */
-export const treeRoot = path.resolve(process.env.DRIVE_SYNC_TREE || path.join(shareDir, 'tree'));
-export const remoteRootPath = (process.env.DRIVE_SYNC_REMOTE || '').replace(/^\/+|\/+$/g, '');
+export const treeRoot = path.resolve(envAlias('TREE') || path.join(shareDir, 'tree'));
+export const remoteRootPath = (envAlias('REMOTE') || '').replace(/^\/+|\/+$/g, '');
 
 export const stateDir = stateHome ? path.join(stateHome, 'state') : path.join(stateBase, APP_DIR);
 export const stateDbPath = path.join(shareDir, 'state.db');
@@ -27,7 +37,7 @@ export const logFile = path.join(stateDir, 'phnx-drive-sync.log');
 export const lockFile = path.join(stateDir, 'daemon.lock');
 export const rpcSocket = path.join(stateDir, 'rpc.sock');
 
-/** Old state/data dirs, migrated once into the phnx-drive-sync layout; null under DRIVE_SYNC_HOME. */
+/** Old state/data dirs, migrated once into the phnx-drive-sync layout; null under PHNX_DRIVE_SYNC_HOME. */
 export const legacyShareDir = stateHome ? null : path.join(dataHome, LEGACY_APP_DIR);
 export const legacyStateDir = stateHome ? null : path.join(stateBase, LEGACY_APP_DIR);
 
@@ -36,7 +46,7 @@ export const partialSuffix = '.drivesync.part';
 
 export const modifyWindowMs = 1_500;
 export const seedAdoptWindowMs = 10_000;
-export const eventIdleTimeoutMs = Number(process.env.DRIVE_SYNC_EVENT_IDLE_MS || 20_000);
+export const eventIdleTimeoutMs = Number(envAlias('EVENT_IDLE_MS') || 20_000);
 export const watcherDebounceMs = 3_000;
 
 /**
@@ -44,10 +54,10 @@ export const watcherDebounceMs = 3_000;
  * missing, permanently crashed, or reports only partial coverage (watch limit),
  * the daemon falls back to a low-frequency incremental pass at this interval so
  * local edits still sync. While the watcher is healthy the poll stays silent.
- * 0 disables the safety net entirely (`DRIVE_SYNC_POLL_MS=0`).
+ * 0 disables the safety net entirely (`PHNX_DRIVE_SYNC_POLL_MS=0`).
  */
 export function watcherPollMs(): number {
-    const v = Number(process.env.DRIVE_SYNC_POLL_MS || 120_000);
+    const v = Number(envAlias('POLL_MS') || 120_000);
     return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
@@ -59,7 +69,7 @@ export function watcherPollMs(): number {
  * on phnx-drive-sync.service above this value so the graceful path wins.
  */
 export function shutdownGraceMs(): number {
-    const v = Number(process.env.DRIVE_SYNC_SHUTDOWN_GRACE_MS || 120_000);
+    const v = Number(envAlias('SHUTDOWN_GRACE_MS') || 120_000);
     return Number.isFinite(v) && v >= 0 ? v : 120_000;
 }
 
@@ -72,19 +82,19 @@ export const watcherMaxDebounceMs = 30_000;
 
 /** Newly-appeared remote files: `local` (default, download) or `online` (placeholder). Read per call so tests can flip it. */
 export function newFilesMode(): 'local' | 'online' {
-    return (process.env.DRIVE_SYNC_NEW_FILES ?? '').trim().toLowerCase() === 'online' ? 'online' : 'local';
+    return (envAlias('NEW_FILES') ?? '').trim().toLowerCase() === 'online' ? 'online' : 'local';
 }
 /** Auto-evict threshold in GiB; 0 (default) disables auto-eviction entirely. */
 export function evictFreeGb(): number {
-    return Math.max(0, Number(process.env.DRIVE_SYNC_EVICT_FREE_GB || 0));
+    return Math.max(0, Number(envAlias('EVICT_FREE_GB') || 0));
 }
 /** Sidecar default for recall-on-hover/prefetch; `phnx-drive-sync.sh prefetch on|off` overrides via state.db meta. */
 export function prefetchDefault(): boolean {
-    return /^(1|on|true|yes)$/i.test((process.env.DRIVE_SYNC_PREFETCH ?? '').trim());
+    return /^(1|on|true|yes)$/i.test((envAlias('PREFETCH') ?? '').trim());
 }
-/** Nautilus badges (metadata::emblems): on by default; `DRIVE_SYNC_EMBLEMS=off` disables. */
+/** Nautilus badges (metadata::emblems): on by default; `PHNX_DRIVE_SYNC_EMBLEMS=off` disables. */
 export function emblemsEnabled(): boolean {
-    return !/^(0|off|false|no)$/i.test((process.env.DRIVE_SYNC_EMBLEMS ?? '').trim());
+    return !/^(0|off|false|no)$/i.test((envAlias('EMBLEMS') ?? '').trim());
 }
 
 export function isPartial(rel: string): boolean {

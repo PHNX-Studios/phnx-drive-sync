@@ -1,7 +1,7 @@
 #!/bin/sh
 # Launcher for the PHNX Drive Sync file manager GUI (installed runtime copy).
 # GTK4 + Libadwaita typelibs are provided by the distro packages install.sh pulls in.
-LIB="${DRIVE_SYNC_LIBDIR:-$HOME/.local/lib/phnx-drive-sync}"
+LIB="${PHNX_DRIVE_SYNC_LIBDIR:-${DRIVE_SYNC_LIBDIR:-$HOME/.local/lib/phnx-drive-sync}}"
 PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null)"
 if [ -z "$PY" ]; then
     echo "phnx-drive-sync-gui: python3 not found" >&2

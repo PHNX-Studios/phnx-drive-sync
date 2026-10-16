@@ -132,7 +132,7 @@ describe('evict reporting', () => {
 
 describe('maybeAutoEvict', () => {
     test('disabled (default threshold 0): never touches the tree', () => {
-        delete process.env.DRIVE_SYNC_EVICT_FREE_GB;
+        delete process.env.PHNX_DRIVE_SYNC_EVICT_FREE_GB;
         seedLocalFile('auto.bin', Buffer.alloc(4096));
         expect(maybeAutoEvict()).toBeNull();
         expect(existsSync(path.join(treeRoot, 'auto.bin'))).toBe(true);
@@ -141,14 +141,14 @@ describe('maybeAutoEvict', () => {
     test('positive threshold: runs, but only eligible (clean) files go', () => {
         const dirty = seedLocalFile('auto2.bin', Buffer.alloc(4096));
         mutate(dirty);
-        process.env.DRIVE_SYNC_EVICT_FREE_GB = '999999'; // absurdly high: below threshold on any disk
+        process.env.PHNX_DRIVE_SYNC_EVICT_FREE_GB = '999999'; // absurdly high: below threshold on any disk
         try {
             const out = maybeAutoEvict();
             expect(out).not.toBeNull();
             expect(out!.freed).toBe(0);
             expect(out!.dirty).toBe(1);
         } finally {
-            delete process.env.DRIVE_SYNC_EVICT_FREE_GB;
+            delete process.env.PHNX_DRIVE_SYNC_EVICT_FREE_GB;
         }
         expect(existsSync(path.join(treeRoot, 'auto2.bin'))).toBe(true);
     });
