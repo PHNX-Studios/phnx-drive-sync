@@ -46,9 +46,11 @@ welcome:
   the installer, and refuses releases whose `min_glibc` / `min_kernel` /
   `min_python` exceed the host. Reports of a bypass or downgrade path are
   in scope.
-- **Local IPC.** `pin` / `unpin` / `evict` / `prefetch` talk to the daemon over a
-  Unix domain socket under `$XDG_RUNTIME_DIR`. The socket must not allow other
-  local users to act on your files; report any permission or injection issue.
+- **Local IPC.** `pin` / `unpin` / `evict` / `prefetch` / `list` / `sync` talk to
+  the daemon over a Unix domain socket under `$XDG_RUNTIME_DIR` (the CLI, the
+  tray and the file manager GUI are all clients of it). The socket must not allow
+  other local users to act on your files; report any permission or injection
+  issue.
 - **FUSE sidecar.** The Python sidecar materializes on-demand files on read. A
   path-traversal or symlink escape out of the real tree is in scope.
 - **Installer.** `install.sh` fetches and unpacks host packages into `~/.local`
@@ -60,5 +62,5 @@ welcome:
 - The behavior or availability of Proton's hosted services, which are governed
   by Proton's own terms and security process.
 - Vulnerabilities in the vendored Proton Drive SDK itself. Please report those
-  upstream at https://github.com/ProtonDriveApps/sdk. We will still bump the
+  upstream at <https://github.com/ProtonDriveApps/sdk>. We will still bump the
   vendored copy once a fix is available.

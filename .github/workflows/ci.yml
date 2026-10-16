@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lint:
-    name: Ruff lint
+    name: Lint (Ruff + Markdown)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -21,6 +21,14 @@ jobs:
       - uses: astral-sh/ruff-action@v3
         with:
           version: "0.17.0"
+
+      # Markdown docs via `.markdownlint-cli2.jsonc`; pinned for reproducible
+      # results. Globs are explicit so the vendored SDK docs are not linted.
+      - uses: DavidAnson/markdownlint-cli2-action@v24
+        with:
+          globs: |
+            *.md
+            .github/**/*.md
 
   test:
     name: Type-check and unit tests

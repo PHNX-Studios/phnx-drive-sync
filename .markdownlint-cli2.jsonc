@@ -1,0 +1,24 @@
+{
+  // markdownlint-cli2 configuration for the project documentation.
+  // Local run: npx markdownlint-cli2   (or: bunx markdownlint-cli2)
+  "config": {
+    // The README carries wide tables, so line length is not enforced.
+    "MD013": false,
+    // Keep a Changelog repeats "Added"/"Changed"/"Fixed" under every release,
+    // so headings may repeat as long as they are not siblings.
+    "MD024": { "siblings_only": true }
+  },
+  "globs": [
+    "*.md",
+    ".github/**/*.md"
+  ],
+  "ignores": [
+    "vendor/**",
+    "node_modules/**",
+    "dist/**",
+    ".ori/**",
+    // Internal, machine-specific development log (gitignored): intentionally
+    // long lines, not part of the published docs.
+    "LEDGER.md"
+  ]
+}

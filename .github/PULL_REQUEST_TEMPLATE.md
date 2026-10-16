@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD041 -->
+
 ## What
 
 <!-- One or two sentences on what this changes. -->

@@ -20,7 +20,7 @@ Proton AG.
 - License: MIT
 - Copyright: Copyright (c) 2025-2026 Proton AG
 - Full text: [`vendor/LICENSE.md`](./vendor/LICENSE.md)
-- Upstream: https://github.com/ProtonDriveApps/sdk
+- Upstream: <https://github.com/ProtonDriveApps/sdk>
 
 The SDK is vendored because the runtime resolves its TypeScript sources directly
 (see `tsconfig.json` `paths`), and the release build embeds the SDK (including
@@ -52,7 +52,7 @@ The single-file binaries produced by `packaging/build.sh` embed the Bun runtime.
 
 - License: MIT
 - Copyright: Copyright (c) Bun contributors
-- Upstream: https://github.com/oven-sh/bun
+- Upstream: <https://github.com/oven-sh/bun>
 
 ## Embedded JavaScript dependencies
 
@@ -71,6 +71,20 @@ The Python sidecar dependencies (`pyfuse3`, `trio`, `cffi`) are **not**
 redistributed with this project: `install.sh` installs them from the host
 distribution's packages or from PyPI into the user's home directory. Their
 licenses are handled by their respective upstreams.
+
+## GUI and tray runtime dependencies (not redistributed)
+
+The file manager GUI, the tray icon and the Nautilus badges use the host's GTK
+and GNOME stack rather than any vendored code. `install.sh` installs these from
+the distribution's packages when it can (see the package list in the README), and
+they are **not** redistributed with this project:
+
+- GTK4 and Libadwaita (`gir1.2-gtk-4.0`, `gir1.2-adw-1`) - the file manager GUI.
+- PyGObject / GObject introspection (`python3-gi`) - the GUI and tray bindings.
+- GTK3 and AppIndicator / AyatanaAppIndicator - the tray icon.
+- gvfs - the `metadata::emblems` store behind the Nautilus badges.
+
+Their licenses are handled by their respective upstreams.
 
 ## Generating a full dependency list
 
