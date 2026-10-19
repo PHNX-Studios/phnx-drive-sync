@@ -256,6 +256,10 @@ class EngineUnreachable(RuntimeError):
     """The engine socket is absent/unresponsive; maps to ENOTCONN."""
 
 
+class EngineAuth(RuntimeError):
+    """The engine session is invalid; maps to EACCES (never fall back to a local op)."""
+
+
 # Last connectivity the engine reported (stamped on every RPC response); gates
 # recall-on-hover so a hover storm while offline does not issue RPCs.
 ENGINE_OFFLINE = False
@@ -278,7 +282,7 @@ def rpc(op: str, paths: list):
             raise RuntimeError('sidecar is stopping')
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            sock.settimeout(max(0.1, deadline - time.monotonic()))
+            sock.settimeout(max(0.0, deadline - time.monotonic()))
             sock.connect(RPC)
             break
         except OSError as e:
@@ -304,6 +308,8 @@ def rpc(op: str, paths: list):
     if not resp.get('ok'):
         if resp.get('code') == 'offline':
             raise SidecarOffline(resp.get('error') or 'offline')
+        if resp.get('code') == 'auth':
+            raise EngineAuth(resp.get('error') or 'authentication required')
         raise RuntimeError(resp.get('error') or f'{op} failed')
 
 
@@ -313,6 +319,8 @@ def fuse_err_for(e: BaseException) -> pyfuse3.FUSEError:
         return pyfuse3.FUSEError(errno.ENETDOWN)
     if isinstance(e, EngineUnreachable):
         return pyfuse3.FUSEError(errno.ENOTCONN)
+    if isinstance(e, EngineAuth):
+        return pyfuse3.FUSEError(errno.EACCES)
     if isinstance(e, OSError):
         return pyfuse3.FUSEError(e.errno or errno.EIO)
     return pyfuse3.FUSEError(errno.EIO)
@@ -536,8 +544,8 @@ class Ops(pyfuse3.Operations):
                 return
             try:
                 await trio.to_thread.run_sync(lambda: rpc('mv', [frm, to]))
-            except (SidecarOffline, EngineUnreachable) as e:
-                # offline/engine-gone: report it, do not touch the tree
+            except (SidecarOffline, EngineUnreachable, EngineAuth) as e:
+                # offline / engine-gone / auth: report it, never fall back to a local op
                 raise fuse_err_for(e) from e
             except RuntimeError as e:
                 # engine reports source is no longer a placeholder (race): fall back

@@ -275,8 +275,8 @@ function hydrateOne(p: string): Promise<void> {
             await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
         } catch (e) {
             // a black-holed link (probe still "up"): classify the real failure so
-            // the *next* open fails fast too
-            reportNetworkError(e);
+            // the *next* open fails fast too (auth is not a connectivity problem)
+            if (!remote.isAuthError(e)) reportNetworkError(e);
             throw e;
         }
         st.onlineDel(p); // keep the marker if the download failed (I5)
@@ -310,14 +310,14 @@ async function mvPlaceholder(from: string, to: string): Promise<void> {
     const row = st.syncGet(from);
     if (!row || row.type !== 'file') throw new Error(`no such synced file: ${from}`);
     if (!st.onlineHas(from)) throw new Error(`not a placeholder: ${from}`);
-    if (st.syncGet(to) || st.onlineHas(to) || existsSync(absOf(to))) throw new Error(`target already exists: ${to}`);
     const nameChanged = baseName(to) !== baseName(from);
     const parentChanged = parentRel(to) !== parentRel(from);
+    // a placeholder rename with a real move needs the remote API; offline fail
+    // fast, before the target checks, and mutate nothing (a local-only row rename
+    // would desync the baseline from remote - I3)
+    if ((nameChanged || parentChanged) && isOffline()) throw new OfflineError(`offline: cannot rename ${from} until you reconnect`);
+    if (st.syncGet(to) || st.onlineHas(to) || existsSync(absOf(to))) throw new Error(`target already exists: ${to}`);
     if (nameChanged || parentChanged) {
-        // a placeholder rename with a real move needs the remote API; offline we
-        // fail fast and mutate nothing (a local-only row rename would desync the
-        // baseline from remote - I3)
-        if (isOffline()) throw new OfflineError(`offline: cannot rename ${from} until you reconnect`);
         if (row.uid === null) throw new Error(`missing remote id: ${from}`);
         let newParentUid: string | null = null;
         if (parentChanged) newParentUid = await ensureRemoteParentDir(parentRel(to));
@@ -337,8 +337,8 @@ async function trashPlaceholder(p: string): Promise<void> {
     const row = st.syncGet(p);
     if (row?.type === 'dir') throw new Error(`not a file: ${p}`);
     // trashing a placeholder needs the remote API; offline fail fast with nothing
-    // mutated (row + marker + cache all stay, I3/I5)
-    if (row && row.uid && isOffline()) throw new OfflineError(`offline: cannot move ${p} to trash until you reconnect`);
+    // mutated (row + marker + cache all stay, I3/I5) - including a row with no uid
+    if (isOffline()) throw new OfflineError(`offline: cannot move ${p} to trash until you reconnect`);
     if (row && row.uid) {
         await remote.trashRemoteUid(row.uid);
         remote.cacheRemoveSubtree(p);
@@ -492,7 +492,7 @@ async function pinFiles(reqs: string[]): Promise<PinResult[]> {
             results.push({ path: p, ok: true, note: 'restored' });
         } catch (e) {
             const why = remote.errMsg(e);
-            reportNetworkError(e);
+            if (!remote.isAuthError(e)) reportNetworkError(e);
             results.push({ path: p, ok: false, note: `download failed: ${why}` });
             log('ERROR', `pin ${p}: ${why}`);
         }
@@ -522,6 +522,18 @@ async function daemon(): Promise<void> {
     let rpcStarted = false;
     let timerArmedAt = 0;
     let lastPassStartedAt = 0;
+
+    // Initial-pass barrier + shutdown signals, declared here so the signal handlers
+    // below can resolve them (unblocking handlers waiting on startup/retry).
+    let initialPassDone = false;
+    let initialPassResolve: () => void = () => {};
+    const initialPass = new Promise<void>((resolve) => {
+        initialPassResolve = resolve;
+    });
+    let stopInitResolve: () => void = () => {};
+    const stopInit = new Promise<void>((resolve) => {
+        stopInitResolve = resolve;
+    });
 
     // --- graceful shutdown: finish the in-flight file, then unwind ----------
     // Handlers are registered before the mount and initial pass so a SIGTERM at
@@ -556,6 +568,10 @@ async function daemon(): Promise<void> {
         if (eventsStarted) remote.stopEventLoop();
         if (rpcStarted) stopRpcServer();
         requestStop();
+        // unblock any handler awaiting the initial pass, and abandon an in-flight
+        // initRemote attempt so shutdown never waits on a stuck connection
+        initialPassResolve();
+        stopInitResolve();
         void drainAndStop();
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
@@ -586,14 +602,7 @@ async function daemon(): Promise<void> {
         }, delayMs);
     };
 
-    // Initial-pass barrier + offline hooks (declared before doPass so the timer
-    // callback closes over initialised bindings).
-    let initialPassDone = false;
-    let initialPassResolve: () => void = () => {};
-    const initialPass = new Promise<void>((resolve) => {
-        initialPassResolve = resolve;
-    });
-
+    // Initial-pass barrier + offline hooks (declared at the top of daemon()).
     const doPass = async (): Promise<void> => {
         if (stopping) return;
         if (passing) {
@@ -794,7 +803,13 @@ async function daemon(): Promise<void> {
             return;
         }
         try {
-            await remote.initRemote();
+            const attempt = remote.initRemote();
+            // a shutdown may abandon this attempt; swallow its eventual rejection
+            attempt.catch(() => {
+                /* abandoned on shutdown */
+            });
+            await Promise.race([attempt, stopInit]);
+            if (stopping) break;
             reportSuccess();
             break;
         } catch (e) {
@@ -805,8 +820,8 @@ async function daemon(): Promise<void> {
                 log('WARN', `offline: cannot reach Proton Drive (retrying in ${Math.round(initDelay / 1000)}s): ${remote.errMsg(e)}`);
                 setOffline(true, 'boot');
             } else {
+                // not a connectivity problem: retry without claiming to be offline
                 log('ERROR', `remote init failed (retrying): ${remote.errMsg(e)}`);
-                setOffline(true, 'boot');
             }
             const deadline = Date.now() + initDelay;
             initDelay = Math.min(reconnectInitMaxMs(), initDelay * 2);

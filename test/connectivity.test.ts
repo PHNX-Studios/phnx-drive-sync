@@ -33,16 +33,23 @@ describe('hasDefaultRoute', () => {
         expect(hasDefaultRoute(table)).toBe(false);
     });
 
-    test('detects an IPv6 default route from /proc/net/ipv6_route', () => {
+    test('detects a real IPv6 default route (non-zero next hop)', () => {
         const z32 = '0'.repeat(32);
-        const v6 = `${z32} 00000000 ${z32} 00000000 00000000000000000000000000000001 00000000 00000001 eth0`;
+        // dest(::) plen(00) src(::) srcplen(00) nexthop(2001:db8::1) metric ref use flags dev
+        const v6 = `${z32} 00 ${z32} 00 20010db8000000000000000000000001 00000400 00000001 00000000 00000001 eth0`;
         expect(hasDefaultRoute(`${header}`, v6)).toBe(true);
     });
 
-    test('ignores an IPv6 entry with no next hop', () => {
+    test('ignores the kernel synthetic unreachable default (zero next hop, metric ffffffff)', () => {
         const z32 = '0'.repeat(32);
-        const v6 = `${z32} 00000000 ${z32} 00000000 ${z32} 00000000 00000000 eth0`;
+        const v6 = `${z32} 00 ${z32} 00 ${z32} ffffffff 00000001 00000000 00200200 lo`;
         expect(hasDefaultRoute(`${header}`, v6)).toBe(false);
+    });
+
+    test('accepts an onlink IPv6 default (zero next hop, finite metric)', () => {
+        const z32 = '0'.repeat(32);
+        const v6 = `${z32} 00 ${z32} 00 ${z32} 00000400 00000001 00000000 00000001 eth0`;
+        expect(hasDefaultRoute(`${header}`, v6)).toBe(true);
     });
 });
 

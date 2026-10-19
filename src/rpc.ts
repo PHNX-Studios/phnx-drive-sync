@@ -98,6 +98,8 @@ function pathsOk(op: RpcRequest['op'], arity: number | null, paths: unknown): pa
 }
 
 let server: Server | null = null;
+/** Accepted-but-unfinished connections, so shutdown can abort a blocked handler. */
+const liveSockets = new Set<Socket>();
 
 /** Server side: one JSON-line request per connection, one JSON-line response, then close. */
 export function startRpcServer(handlers: RpcHandlers): void {
@@ -107,6 +109,8 @@ export function startRpcServer(handlers: RpcHandlers): void {
         /* ignore */
     }
     server = createServer((sock) => {
+        liveSockets.add(sock);
+        sock.on('close', () => liveSockets.delete(sock));
         let buf = '';
         let handled = false;
         sock.setEncoding('utf8');
@@ -128,6 +132,15 @@ export function startRpcServer(handlers: RpcHandlers): void {
 }
 
 export function stopRpcServer(): void {
+    // abort in-flight handlers first (a blocked handler must not outlive shutdown)
+    for (const sock of liveSockets) {
+        try {
+            sock.destroy();
+        } catch {
+            /* ignore */
+        }
+    }
+    liveSockets.clear();
     if (!server) return;
     try {
         server.close();

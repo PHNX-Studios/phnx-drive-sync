@@ -52,6 +52,9 @@ export function setOffline(next: boolean, reason: OfflineReason): void {
     if (offline === next) return;
     offline = next;
     offlineSince = next ? new Date().toISOString() : null;
+    // entering offline resets the recovery hysteresis so a single stale upstream
+    // reading cannot immediately clear it
+    if (next) upStreak = 0;
     setStatus({ offline, offlineSince });
     if (next) {
         log('WARN', `offline (${reason}): online-only files will fail fast until reconnect`);
@@ -65,10 +68,10 @@ export function setOffline(next: boolean, reason: OfflineReason): void {
 
 function notifyOffline(): void {
     const now = Date.now();
-    if (now - lastNotifyAt < offlineNotifyCooldownMs()) {
-        offlineNotified = false; // suppressed: do not announce a "back online" for it
-        return;
-    }
+    // a suppressed notice (cooldown) never sets offlineNotified, so the matching
+    // "back online" stays silent too; setOffline only runs on an edge, so the
+    // flag is already false when we get here after a real online transition
+    if (now - lastNotifyAt < offlineNotifyCooldownMs()) return;
     lastNotifyAt = now;
     offlineNotified = true;
     notify("You're offline - online-only files can't be opened until you reconnect.");
@@ -117,12 +120,16 @@ export function linkIsDown(readFile: (p: string) => string, listNet: () => strin
 }
 
 /**
- * True when either routing table has a default route.
+ * True when either routing table has a real default route.
  *
  * `/proc/net/route` columns are: Iface Destination Gateway Flags ... Destination
  * `00000000` is the IPv4 default; a non-zero Gateway confirms it is real.
- * `/proc/net/ipv6_route` encodes the default as 32 zero hex chars destination +
- * 32 zero hex chars prefix; its 5th field is the next-hop (all-zero = no route).
+ *
+ * `/proc/net/ipv6_route` columns are: dest(32 hex) plen(2 hex) src(32)
+ * srcplen(2) nexthop(32) metric(8) ... The kernel always installs a synthetic
+ * `::/0` "unreachable default" (optional with `ip`); it is recognisable by an
+ * all-zero next hop and metric `ffffffff`, and must NOT count as connectivity.
+ * A real default has either a non-zero next hop or a finite metric.
  */
 export function hasDefaultRoute(ipv4: string, ipv6 = ''): boolean {
     for (const line of ipv4.split('\n').slice(1)) {
@@ -134,9 +141,12 @@ export function hasDefaultRoute(ipv4: string, ipv6 = ''): boolean {
     }
     for (const line of ipv6.split('\n')) {
         const cols = line.trim().split(/\s+/);
-        // dest(32 hex) prefixlen(8 hex) src(32) srcprefix(8) gateway(32) ...
-        if (cols.length < 5) continue;
-        if (/^0{32}$/.test(cols[0]) && /^0{8}$/.test(cols[1]) && !/^0{32}$/.test(cols[4])) return true;
+        if (cols.length < 6) continue;
+        const dstZero = /^0+$/.test(cols[0]);
+        const plenZero = /^0+$/.test(cols[1]);
+        const gwZero = /^0+$/.test(cols[4]);
+        const unreachable = cols[5] === 'ffffffff';
+        if (dstZero && plenZero && (!gwZero || !unreachable)) return true;
     }
     return false;
 }

@@ -92,6 +92,9 @@ class FuseErrFor(unittest.TestCase):
     def test_unreachable_maps_to_enotconn(self):
         self.assertEqual(self.mod.fuse_err_for(self.mod.EngineUnreachable("x")).errno, errno.ENOTCONN)
 
+    def test_auth_maps_to_eacces(self):
+        self.assertEqual(self.mod.fuse_err_for(self.mod.EngineAuth("x")).errno, errno.EACCES)
+
     def test_generic_runtime_maps_to_eio(self):
         self.assertEqual(self.mod.fuse_err_for(RuntimeError("boom")).errno, errno.EIO)
 
@@ -129,6 +132,12 @@ class RpcContract(unittest.TestCase):
         self.mod.RPC = path
         with self.assertRaises(RuntimeError):
             self.mod.rpc("hydrate", ["a.txt"])
+
+    def test_auth_response_raises_engine_auth(self):
+        path, _ = _serve_one({"ok": False, "code": "auth", "error": "401 Unauthorized"})
+        self.mod.RPC = path
+        with self.assertRaises(self.mod.EngineAuth):
+            self.mod.rpc("trash", ["a.txt"])
 
     def test_connect_budget_expiry_raises_engine_unreachable(self):
         self.mod.RPC = os.path.join(tempfile.mkdtemp(prefix="sidecar-test-"), "absent.sock")
