@@ -37,6 +37,13 @@ What it provides:
 
 - [Overview](#overview)
 - [Requirements](#requirements)
+- [Authentication and sessions](#authentication-and-sessions)
+  - [How sign-in works](#how-sign-in-works)
+  - [Where the session lives](#where-the-session-lives)
+  - [Token refresh](#token-refresh)
+  - [Session states](#session-states)
+  - [Recovering from an expired session](#recovering-from-an-expired-session)
+  - [Logging out](#logging-out)
 - [Install](#install)
   - [Quick install](#quick-install)
   - [Installer flags](#installer-flags)
@@ -76,14 +83,133 @@ What it provides:
 - [bun](https://bun.sh) to build and run from a source checkout. The release
   tarball is self-contained (a compiled engine plus the bundled login CLI), so
   an installed copy needs no external runtime.
-- An authenticated Proton Drive session. Sign in with `phnx-drive-sync login`;
-  if the session expires, re-run it (or `proton-drive re-login`, whose
-  credentials live in the GNOME keyring and are shared with this engine).
+- An authenticated Proton Drive session. Sign in with `phnx-drive-sync login`
+  (see [Authentication and sessions](#authentication-and-sessions)); the session
+  is shared with the official CLI through the GNOME keyring.
 
 Files on demand additionally needs the system FUSE stack. The GUI needs GTK4 +
 Libadwaita and the tray needs GTK3 + AppIndicator; the installer sets these up
 and each degrades gracefully when missing. See [Install](#install) and
 [User interfaces](#user-interfaces).
+
+## Authentication and sessions
+
+Sign-in is delegated entirely to the official Proton Drive CLI; PHNX Drive Sync
+never handles your password or account secrets itself. This section describes
+how sign-in works, where the session lives, and what the engine does as that
+session changes state.
+
+### How sign-in works
+
+`phnx-drive-sync login` is a thin wrapper around the official CLI that is bundled
+with the release (or falls back to a system `proton-drive`):
+
+1. It prints a short third-party disclosure to stderr (Proton requires clients
+   to identify themselves honestly), then runs `proton-drive auth login`.
+2. The CLI opens your browser to a Proton sign-in page. The password is entered
+   in the browser only - never on the command line. You can even complete the
+   sign-in on another device; the terminal waits until it finishes.
+3. On success the CLI stores the session in the OS secret store (see
+   [Where the session lives](#where-the-session-lives)) and login returns.
+
+If the bundled CLI is missing (`phnx-drive-sync login` exits `127`), reinstall,
+or install the official CLI and run `proton-drive auth login` directly - both
+write to the same store.
+
+### Where the session lives
+
+The authenticated session is kept in the **OS secret store**, not in `state.db`,
+the logs, or the config files (see [SECURITY.md](SECURITY.md)). On Linux that is
+GNOME Keyring / libsecret under the service `ch.proton.drive/drive-sdk-cli`.
+
+The stored entry contains:
+
+| Field | Purpose |
+| --- | --- |
+| `session.uid` | Proton user id. |
+| `session.accessToken` | Short-lived bearer token for API calls. |
+| `session.refreshToken` | Longer-lived token used to renew the access token. |
+| `userKeyPassword` | Unlocks the user's keys so Drive content can be decrypted. |
+| `cachePassword` | Random secret that encrypts the SDK's local crypto cache. |
+| `telemetryEnabled` | Whether optional telemetry is enabled. |
+
+`PROTON_DRIVE_CREDENTIALS_STORE` selects the backend: `keychain` (default, the OS
+secret store), `pass` (a GPG-encrypted password-store entry), or `unsafe_file`
+(plaintext `auth-session.json` in the app data folder - testing only, never for
+real use). The default needs no configuration. To use a non-default store, set
+the variable for the engine (in the systemd env file,
+`~/.config/phnx-drive-sync/env`, which also carries the SDK's
+`PROTON_DRIVE_CACHE_DIR` and `PROTON_DRIVE_LOG_LEVEL`) and for the login command
+(in your shell environment), so the CLI and the engine agree on where the session
+lives.
+
+Because both the official CLI and the engine read this same store, one sign-in
+serves both. `phnx-drive-sync login` and `proton-drive auth login` are
+interchangeable for the purposes of this app.
+
+### Token refresh
+
+The SDK renews the short-lived access token automatically from the refresh token
+on every authenticated request, so an ordinary token expiry never interrupts
+syncing. The engine classifies a response as an authentication failure only when
+it matches a small set of signals (`401`/`403`, `unauthorized`, `forbidden`,
+`session`, `refresh token`, two-factor, `authentication required`). A transient
+failure (a network blip, a temporary 2FA prompt) therefore recovers on its own
+once the SDK can refresh again.
+
+### Session states
+
+The engine's `status.json` carries a `state` field with one of:
+
+| State | Meaning |
+| --- | --- |
+| `starting` | Engine is booting (before the first pass). |
+| `passing` | A sync pass is in flight. |
+| `running` | Steady state: initial pass done, listening for changes. |
+| `idle` | `once` mode finished a single pass. |
+| `stopped` | Engine is shut down (or `once --dry-run`). |
+| `auth-required` | The session was rejected; syncing is paused until sign-in. |
+
+The auth-relevant behavior differs by when the failure happens:
+
+- **Steady state (session expires while running).** The pass that hits the
+  rejection sets `state: auth-required`, records the message in `lastError`, and
+  the engine keeps running. It retries on the next change (a watcher event, a
+  remote event, or the safety poll), so a temporary failure heals itself. The
+  tray icon turns red and the GUI shows "auth required" while in this state.
+- **Startup (no session, or it is already invalid).** The engine cannot resolve
+  the remote root without a valid session, so it fails during startup or the
+  initial full pass and exits. The systemd unit restarts it every 10 s
+  (`Restart=on-failure`), which surfaces as a red "service failed" tray state
+  rather than `auth-required`. The fix is to sign in; the unit then comes up on
+  its own.
+- **`once` mode.** Exit code `3` means the pass hit an authentication failure
+  (`0` ok, `2` other errors). A missing or invalid session at startup fails
+  earlier and exits `1` instead.
+
+### Recovering from an expired session
+
+To recover after a rejection:
+
+1. Sign in again: `phnx-drive-sync login` (or `proton-drive auth login`). This
+   writes a fresh session to the keyring.
+2. Restart the engine so it re-reads the keyring:
+   `phnx-drive-sync restart` (or
+   `systemctl --user restart phnx-drive-sync.service`).
+
+The running engine loads the session once at startup; it does not re-read the
+keyring on a later pass, so a restart is the reliable way to pick up a new
+session after a full re-login. (A transient failure that only needs a token
+refresh recovers without any action, because the SDK refreshes in place.)
+
+### Logging out
+
+`proton-drive auth logout` removes the keyring entry (and the CLI's local
+caches). A running engine loads the session only at startup, so it is not
+notified of the change and keeps using its in-memory session; it notices only on
+its next restart, when it finds no session and fails to initialize (exiting until
+you sign in again). To sign out completely, run `proton-drive auth logout` and
+restart the engine, for example with `phnx-drive-sync restart`.
 
 ## Install
 
@@ -163,7 +289,7 @@ checkout use `bun run src/index.ts <cmd>` or `./phnx-drive-sync.sh <cmd>`):
 | `phnx-drive-sync pin <paths...>` | Download online-only files back to this device. |
 | `phnx-drive-sync evict [paths...]` | Bulk "Free up space": no paths = every local file. |
 | `phnx-drive-sync prefetch on\|off\|status` | Recall-on-hover toggle (default off). |
-| `phnx-drive-sync login` | Sign in to Proton Drive (bundled official CLI). |
+| `phnx-drive-sync login` | Sign in to Proton Drive (bundled official CLI); see [Authentication and sessions](#authentication-and-sessions). |
 | `phnx-drive-sync restart` | `systemctl --user restart` + wait for the FUSE mount. |
 | `phnx-drive-sync update [--check]` | Install a newer release, if one is available. |
 | `phnx-drive-sync version` | Print the version. |
@@ -522,9 +648,10 @@ covered without a restart.
 
 ### Auth failures
 
-Auth failures surface in `status.json` (`auth-required`) and are retried each
-interval - re-login with the official CLI: `proton-drive` (credentials live in
-the GNOME keyring, shared with this engine).
+Auth failures surface in `status.json` as `auth-required` and in the tray icon,
+and recover either automatically (a token refresh) or after a re-login plus a
+restart. The full behavior, the session states and the recovery steps are in
+[Authentication and sessions](#authentication-and-sessions).
 
 ## Development
 
