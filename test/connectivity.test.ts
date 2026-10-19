@@ -23,9 +23,9 @@ describe('hasDefaultRoute', () => {
         expect(hasDefaultRoute(table)).toBe(true);
     });
 
-    test('rejects a default route with an all-zero gateway', () => {
+    test('accepts an on-link IPv4 default (all-zero gateway, e.g. PPP/tunnel)', () => {
         const table = `${header}\neth0\t00000000\t00000000\t0001\t0\t0\t100\t00000000\t0\t0\t0`;
-        expect(hasDefaultRoute(table)).toBe(false);
+        expect(hasDefaultRoute(table)).toBe(true);
     });
 
     test('rejects tables with only host routes', () => {

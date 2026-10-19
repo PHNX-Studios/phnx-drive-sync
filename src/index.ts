@@ -693,11 +693,14 @@ async function daemon(): Promise<void> {
 
     // Preserves the pre-existing "an operation that races the initial pass waits
     // for it" semantics now that the RPC socket opens during startup. Offline is
-    // handled per-op (each op has its own offline behaviour), so callers guard
-    // this with `if (!isOffline())`.
-    const readyBarrier = async (): Promise<void> => {
-        if (initialPassDone) return;
+    // handled per-op (each op has its own offline behaviour) and a shutting-down
+    // engine refuses to start new work (shutdown resolves `initialPass` to unblock
+    // waiters, so the post-await `stopping` check is essential).
+    const readyForOp = async (): Promise<void> => {
+        if (stopping) throw new Error('engine is stopping');
+        if (initialPassDone || isOffline()) return;
         await initialPass;
+        if (stopping) throw new Error('engine is stopping');
     };
 
     let rpcStartedLocal = false;
@@ -705,7 +708,7 @@ async function daemon(): Promise<void> {
         if (rpcStartedLocal) return;
         startRpcServer({
             pin: async (paths) => {
-                if (!isOffline()) await readyBarrier();
+                await readyForOp();
                 const results = await pinFiles(paths); // offline -> 'offline: needs internet' per file
                 afterRpc();
                 return results;
@@ -713,7 +716,7 @@ async function daemon(): Promise<void> {
             unpin: async (paths) => {
                 // freeing local bytes is a local op; offline still works for the
                 // files whose baseline is steady (dirty ones fail cleanly)
-                if (!isOffline()) await readyBarrier();
+                await readyForOp();
                 const results = await unpinFiles(paths, ensureFresh);
                 afterRpc();
                 return results;
@@ -721,8 +724,8 @@ async function daemon(): Promise<void> {
             evict: async (paths) => {
                 // evictAll re-verifies clean+steady itself, so the ensureFresh
                 // pass (which needs the network) is only needed while online
+                await readyForOp();
                 if (!isOffline()) {
-                    await readyBarrier();
                     // never free unsynced bytes: run/await a pass first (I4)
                     await ensureFresh();
                 }
@@ -762,21 +765,21 @@ async function daemon(): Promise<void> {
                 return [{ path: 'prefetch', ok: true, note: `now ${v}` }];
             },
             hydrate: async (paths) => {
-                if (!isOffline()) await readyBarrier();
+                await readyForOp();
                 const p = paths[0];
                 await hydrateOne(p); // offline -> OfflineError -> ENETDOWN
                 afterRpc();
                 return [{ path: p, ok: true, note: 'hydrated' }];
             },
             mv: async (paths) => {
-                if (!isOffline()) await readyBarrier();
+                await readyForOp();
                 const [from, to] = paths;
                 await mvPlaceholder(from, to); // offline -> OfflineError
                 afterRpc();
                 return [{ path: from, ok: true, note: `moved to ${to}` }];
             },
             trash: async (paths) => {
-                if (!isOffline()) await readyBarrier();
+                await readyForOp();
                 const p = paths[0];
                 await trashPlaceholder(p); // offline -> OfflineError
                 afterRpc();

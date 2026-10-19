@@ -132,8 +132,10 @@ export function startRpcServer(handlers: RpcHandlers): void {
 }
 
 export function stopRpcServer(): void {
-    // abort in-flight handlers first (a blocked handler must not outlive shutdown)
-    for (const sock of liveSockets) {
+    // abort in-flight handlers first (a blocked handler must not outlive shutdown);
+    // iterate a copy - destroy() fires each socket's close handler, which mutates
+    // the set mid-iteration otherwise
+    for (const sock of [...liveSockets]) {
         try {
             sock.destroy();
         } catch {

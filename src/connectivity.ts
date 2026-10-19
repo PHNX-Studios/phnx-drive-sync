@@ -122,8 +122,9 @@ export function linkIsDown(readFile: (p: string) => string, listNet: () => strin
 /**
  * True when either routing table has a real default route.
  *
- * `/proc/net/route` columns are: Iface Destination Gateway Flags ... Destination
- * `00000000` is the IPv4 default; a non-zero Gateway confirms it is real.
+ * `/proc/net/route` columns are: Iface Destination Gateway Flags ... A destination
+ * of `00000000` is the IPv4 default route (an all-zero gateway is an on-link
+ * default, e.g. PPP); the row disappears when the link goes down.
  *
  * `/proc/net/ipv6_route` columns are: dest(32 hex) plen(2 hex) src(32)
  * srcplen(2) nexthop(32) metric(8) ... The kernel always installs a synthetic
@@ -135,9 +136,7 @@ export function hasDefaultRoute(ipv4: string, ipv6 = ''): boolean {
     for (const line of ipv4.split('\n').slice(1)) {
         const cols = line.trim().split(/\s+/);
         if (cols.length < 3) continue;
-        const dest = cols[1];
-        const gateway = cols[2];
-        if (dest === '00000000' && gateway && gateway !== '00000000') return true;
+        if (cols[1] === '00000000') return true;
     }
     for (const line of ipv6.split('\n')) {
         const cols = line.trim().split(/\s+/);
