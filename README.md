@@ -136,9 +136,12 @@ The stored entry contains:
 `PROTON_DRIVE_CREDENTIALS_STORE` selects the backend: `keychain` (default, the OS
 secret store), `pass` (a GPG-encrypted password-store entry), or `unsafe_file`
 (plaintext `auth-session.json` in the app data folder - testing only, never for
-real use). The value lives in the systemd env file
-(`~/.config/phnx-drive-sync/env`), alongside the SDK's `PROTON_DRIVE_CACHE_DIR`
-and `PROTON_DRIVE_LOG_LEVEL`.
+real use). The default needs no configuration. To use a non-default store, set
+the variable for the engine (in the systemd env file,
+`~/.config/phnx-drive-sync/env`, which also carries the SDK's
+`PROTON_DRIVE_CACHE_DIR` and `PROTON_DRIVE_LOG_LEVEL`) and for the login command
+(in your shell environment), so the CLI and the engine agree on where the session
+lives.
 
 Because both the official CLI and the engine read this same store, one sign-in
 serves both. `phnx-drive-sync login` and `proton-drive auth login` are
