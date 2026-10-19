@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, renameSync, rmdirSync, statSync, unlinkSync } from 'node:fs';
 
 import { modifyWindowMs, newFilesMode, seedAdoptWindowMs, treeRoot } from './config';
+import { reportNetworkError } from './connectivity';
 import { bumpRevision, log, setStatus } from './log';
 import * as remote from './remote';
 import * as st from './state';
@@ -651,6 +652,7 @@ export async function execute(
                 s.authFailed = true;
                 break;
             }
+            reportNetworkError(e);
         }
     }
     if (total > 0) setStatus({ progress: null });
@@ -687,6 +689,7 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
             return s;
         }
         log('WARN', `remote scan failed, using cached remote view: ${s.lastError}`);
+        reportNetworkError(e);
         R = remote.incrementalRemoteMap();
     }
 

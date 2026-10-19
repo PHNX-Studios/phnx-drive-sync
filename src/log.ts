@@ -45,6 +45,14 @@ export interface StatusShape {
     prefetch: boolean;
     /** FUSE mount health: the sidecar can die while the engine keeps running */
     mount: 'ok' | 'degraded';
+    /**
+     * Connectivity hint: true when the engine believes the network is down (link
+     * probe, a real network failure, or the SDK's transfersPaused event). Used to
+     * fail placeholder recall fast and to show an "offline" tray/GUI state.
+     */
+    offline: boolean;
+    /** ISO timestamp of the most recent online->offline transition (null when online). */
+    offlineSince: string | null;
     counts: {
         tracked: number;
         uploads: number;
@@ -70,6 +78,8 @@ export const status: StatusShape = {
     progress: null,
     prefetch: prefetchDefault(),
     mount: 'ok',
+    offline: false,
+    offlineSince: null,
     counts: { tracked: 0, uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0, placeholders: 0, reclaimable: 0 },
 };
 

@@ -2,9 +2,11 @@ import { existsSync, mkdirSync, renameSync, statSync, unlinkSync, utimesSync } f
 import path from 'node:path';
 
 import {
+    ConnectionError,
     DriveEventType,
     FeatureFlags,
     NodeType,
+    SDKEvent,
     type DriveEvent,
     type NodeEntity,
     type ProtonDriveClient,
@@ -55,6 +57,102 @@ export function isAuthError(e: unknown): boolean {
 
 export function isAbortError(e: unknown): boolean {
     return e instanceof Error && (e.name === 'AbortError' || /abort/i.test(e.message));
+}
+
+/**
+ * Engine-side "I would have touched the network, but we know we are offline".
+ *
+ * Thrown by the hydrate/mv/trash/pin paths when connectivity is already known to
+ * be down, so the failure is instant (no SDK retries) and carries a machine-
+ * readable class over RPC (`{ ok:false, code:'offline' }`) the sidecar maps to
+ * `ENETDOWN` and the CLI/GUI render as "you're offline".
+ */
+export class OfflineError extends Error {
+    name = 'OfflineError';
+    constructor(message = 'offline') {
+        super(message);
+    }
+}
+
+export function isOfflineError(e: unknown): boolean {
+    return e instanceof OfflineError || (e instanceof Error && e.name === 'OfflineError');
+}
+
+function isTransientTransportError(message: string | undefined): boolean {
+    if (!message) return false;
+    const lower = message.toLowerCase();
+    return (
+        lower.includes('socket connection was closed unexpectedly') ||
+        lower.includes('other side closed') ||
+        lower.includes('socket hang up')
+    );
+}
+
+function hasTransientTransportCode(e: Error): boolean {
+    const code = (e as NodeJS.ErrnoException).code;
+    return code === 'ECONNRESET' || code === 'EPIPE' || code === 'UND_ERR_SOCKET';
+}
+
+/**
+ * Classify a throwable as a network/connectivity failure.
+ *
+ * Mirrors the SDK's internal classifier (`vendor/client/js/src/internal/errors.ts`)
+ * but is engine-owned and dependency-free, so it also catches errors that leak
+ * through from the HTTP stack as plain `Error`/`TypeError`/`FetchError` with a
+ * transient `code` or a `cause` chain.
+ *
+ * Callers MUST check `isAuthError` first: a 401/403 is an auth problem, not
+ * connectivity.
+ */
+export function isNetworkError(e: unknown): boolean {
+    if (!(e instanceof Error)) return false;
+    if (
+        e instanceof ConnectionError ||
+        e.name === 'ConnectionError' ||
+        e.name === 'OfflineError' ||
+        e.name === 'NetworkError' ||
+        e.name === 'FetchError'
+    ) {
+        return true;
+    }
+    if (e.message?.toLowerCase() === 'network error') return true;
+    if (
+        e.name === 'TypeError' &&
+        ['Failed to fetch', 'NetworkError when attempting to fetch resource', 'Load failed'].includes(e.message)
+    ) {
+        return true;
+    }
+    if (isTransientTransportError(e.message) || hasTransientTransportCode(e)) return true;
+    if (e.cause instanceof Error) {
+        return isTransientTransportError(e.cause.message) || hasTransientTransportCode(e.cause);
+    }
+    return false;
+}
+
+/**
+ * SDK already knows it is offline (after N consecutive offline errors) or that
+ * transfers may resume again. Wired by `connectivity.ts` once the SDK is ready.
+ */
+export interface SdkConnectivityHandlers {
+    paused: () => void;
+    resumed: () => void;
+}
+
+let connectivityHandlers: SdkConnectivityHandlers | null = null;
+
+/** Register the paused/resumed observers before `initRemote()`. */
+export function onConnectivity(handlers: SdkConnectivityHandlers): void {
+    connectivityHandlers = handlers;
+}
+
+/** Subscribe to the SDK's transfersPaused/transfersResumed events (called by initRemote). */
+function subscribeSdkEvents(client: ProtonDriveClient): void {
+    try {
+        client.onMessage(SDKEvent.TransfersPaused, () => connectivityHandlers?.paused());
+        client.onMessage(SDKEvent.TransfersResumed, () => connectivityHandlers?.resumed());
+    } catch (e) {
+        log('WARN', `could not subscribe to SDK connectivity events: ${errMsg(e)}`);
+    }
 }
 
 export function unwrapName(node: NodeEntity): string | null {
@@ -124,7 +222,26 @@ export async function refreshStorage(force = false): Promise<void> {
 
 // --- lifecycle ---
 
+/**
+ * Tear down a partially/fully initialised SDK without blocking: used between
+ * boot retries (a network failure can leave an app handle behind) and by
+ * shutdownRemote. Never throws.
+ */
+async function resetRemote(): Promise<void> {
+    stopEventLoop();
+    const previous = app;
+    app = null;
+    sdk = null;
+    if (!previous) return;
+    try {
+        await Promise.race([previous.dispose(), sleep(2000)]);
+    } catch {
+        /* disposing is best-effort */
+    }
+}
+
 export async function initRemote(): Promise<void> {
+    await resetRemote(); // clean up a previous partial attempt before retrying
     app = await init({
         appVersion: APP_VERSION,
         clientUidPrefix: CLIENT_UID_PREFIX,
@@ -134,6 +251,7 @@ export async function initRemote(): Promise<void> {
         flags: { [FeatureFlags.DriveSmallFileUpload]: true },
     });
     sdk = app.sdk;
+    subscribeSdkEvents(sdk);
     const root = await app.sdk.getMyFilesRootFolder();
     if (!root.treeEventScopeId) throw new Error('root folder has no tree event scope');
     eventScope = root.treeEventScopeId;

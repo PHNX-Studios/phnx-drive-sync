@@ -1,10 +1,12 @@
-import { spawnSync } from 'node:child_process';
 import { statSync, statfsSync, unlinkSync } from 'node:fs';
 
 import { evictFreeGb, treeRoot } from './config';
 import { log } from './log';
+import { notify } from './notify';
 import * as st from './state';
 import { fileEq, steady } from './sync';
+
+export { notify };
 
 function abs(p: string): string {
     return p === '' ? treeRoot : `${treeRoot}/${p}`;
@@ -40,15 +42,6 @@ function freeBytes(): number {
     // POSIX statfs carries frsize (fragment size); Node's StatsFs type doesn't declare it, bun's does
     const frsize = (s as { frsize?: number }).frsize ?? s.bsize;
     return s.bavail * frsize;
-}
-
-/** Best-effort desktop notification (engine runs under systemd --user, which has session DBus). */
-export function notify(body: string, title = 'Proton Drive'): void {
-    try {
-        spawnSync('notify-send', [title, body], { stdio: 'ignore', timeout: 10_000 });
-    } catch {
-        /* no notification daemon: the log line is the fallback */
-    }
 }
 
 /**

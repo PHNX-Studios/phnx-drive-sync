@@ -3,7 +3,9 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import path from 'node:path';
 
 import { localRoot, rpcSocket, treeRoot } from './config';
+import { isOffline } from './connectivity';
 import { log } from './log';
+import { isAuthError, isOfflineError } from './remote';
 import * as st from './state';
 
 export interface PinResult {
@@ -38,7 +40,15 @@ export interface RpcRequest {
 
 export interface RpcResponse {
     ok: boolean;
+    /**
+     * Machine-readable failure class. `offline` lets the sidecar map the failure
+     * to `ENETDOWN` (and the CLI/GUI render "you're offline") instead of a
+     * generic `EIO`; `auth` distinguishes a session problem from connectivity.
+     */
+    code?: 'offline' | 'auth' | 'not-found' | 'malformed';
     error?: string;
+    /** Engine connectivity at response time (always present; drives sidecar prefetch gating). */
+    offline?: boolean;
     results?: PinResult[];
     /** `list` only: per-entry status of one directory. */
     entries?: ListEntry[];
@@ -132,13 +142,20 @@ export function stopRpcServer(): void {
     }
 }
 
+/** Map a thrown handler error to the machine-readable response class (or undefined). */
+export function errorCode(e: unknown): RpcResponse['code'] {
+    if (isOfflineError(e)) return 'offline';
+    if (isAuthError(e)) return 'auth';
+    return undefined;
+}
+
 async function dispatch(line: string, handlers: RpcHandlers, sock: Socket): Promise<void> {
     let resp: RpcResponse;
     try {
         const req = JSON.parse(line) as RpcRequest;
         const arity = OP_ARITY[req.op];
         if (arity === undefined || !pathsOk(req.op, arity, req.paths)) {
-            resp = { ok: false, error: 'malformed request' };
+            resp = { ok: false, code: 'malformed', error: 'malformed request' };
         } else if (req.op === 'list') {
             resp = { ok: true, entries: await handlers.list(req.paths) };
         } else {
@@ -147,7 +164,12 @@ async function dispatch(line: string, handlers: RpcHandlers, sock: Socket): Prom
         }
     } catch (e) {
         resp = { ok: false, error: e instanceof Error ? e.message : String(e) };
+        const code = errorCode(e);
+        if (code) resp.code = code;
     }
+    // connectivity is stamped on every response (including failures) so the
+    // sidecar can cheaply gate prefetch and map offline failures to ENETDOWN.
+    resp.offline = isOffline();
     try {
         sock.write(JSON.stringify(resp) + '\n');
         sock.end();
@@ -243,17 +265,27 @@ export async function rpcClient(op: 'pin' | 'unpin' | 'evict' | 'prefetch', rawP
         return 1;
     }
     if (!resp.ok) {
+        if (resp.code === 'offline') {
+            console.error(`phnx-drive-sync: you're offline - ${resp.error ?? "this needs internet"}`);
+            return 2;
+        }
         console.error(`phnx-drive-sync: ${resp.error ?? 'request failed'}`);
         return 1;
     }
     let failed = 0;
+    let offlineFailed = 0;
     for (const r of resp.results ?? []) {
         const note = r.note ? `  (${r.note})` : '';
         if (r.ok) console.log(`ok   ${r.path}${note}`);
         else {
             failed++;
+            if (r.note?.startsWith('offline:')) offlineFailed++;
             console.error(`FAIL ${r.path}${note}`);
         }
+    }
+    // collapse N identical offline failures into one actionable line
+    if (offlineFailed > 0) {
+        console.error(`phnx-drive-sync: you're offline - ${offlineFailed} file(s) need internet to download.`);
     }
     if (typeof resp.placeholders === 'number') console.error(`online-only files now: ${resp.placeholders}`);
     return failed > 0 ? 2 : 0;

@@ -69,8 +69,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0 xvfb
 
-      - name: Byte-compile the GUI and tray
-        run: python3 -m compileall -q gui tray test/gui test/tray
+      - name: Byte-compile the GUI, tray and sidecar
+        run: python3 -m compileall -q python gui tray test/gui test/tray
+
+      # Stubs pyfuse3/trio, so no FUSE mount or GTK is needed; exercises the
+      # sidecar's offline errno mapping and RPC contract.
+      - name: Sidecar offline unit tests
+        run: python3 -m unittest discover -s test -p 'test_sidecar_offline.py' -v
 
       # Under Xvfb: some tests build real GTK widgets (context-menu buttons, the
       # listing reconcile). With no display those are skipped, and on GTK 4.14
