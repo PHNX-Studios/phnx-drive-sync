@@ -3,13 +3,15 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import path from 'node:path';
 
 import { appRoot } from './approot';
-import { legacyShareDir, legacyStateDir, lockFile, localRoot, prefetchDefault, shareDir, shutdownGraceMs, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
+import { legacyShareDir, legacyStateDir, lockFile, localRoot, prefetchDefault, reconnectInitMaxMs, reconnectInitMinMs, shareDir, shutdownGraceMs, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
+import { isOffline, reportNetworkError, reportSuccess, sdkPaused, sdkResumed, setOffline, startMonitor, stopMonitor } from './connectivity';
 import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
 import { bumpRevision, log, setStatus, status } from './log';
 import { isMountPoint, monitorMount, mountOkPath, startMount, stopMount } from './mount';
 import * as remote from './remote';
+import { OfflineError } from './remote';
 import { rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc';
 import { waitForPassEnd } from './shutdown';
 import * as st from './state';
@@ -130,8 +132,26 @@ async function main(): Promise<void> {
 
     acquireLock();
     try {
-        await remote.initRemote();
         if (mode === 'once') {
+            // one-shot: no mount, but surface an offline run with a clear message
+            // and exit 2 rather than a raw SDK stack / auth exit
+            try {
+                await remote.initRemote();
+            } catch (e) {
+                if (remote.isAuthError(e)) {
+                    log('ERROR', `auth failure: ${remote.errMsg(e)}`);
+                    console.error('phnx-drive-sync: authentication required - run: phnx-drive-sync login');
+                    process.exitCode = 3;
+                    return;
+                }
+                if (remote.isNetworkError(e)) {
+                    log('WARN', `offline at init: ${remote.errMsg(e)}`);
+                    console.error("phnx-drive-sync: offline - can't reach Proton Drive");
+                    process.exitCode = 2;
+                    return;
+                }
+                throw e;
+            }
             const s = await runPass({ forceFull: true, dry: dryRun });
             if (!dryRun) await syncEmblemsOnce();
             setStatus({ state: dryRun ? 'stopped' : 'idle' });
@@ -243,12 +263,24 @@ function hydrateOne(p: string): Promise<void> {
             return;
         }
         if (st.onlineGet(p) === null) throw new Error(`not a placeholder: ${p}`);
+        // known-offline: fail instantly (no SDK retries) so the sidecar can answer
+        // the kernel with ENETDOWN instead of hanging the open path for 10-30s (I5:
+        // the marker is untouched, so a retry after reconnect works)
+        if (isOffline()) throw new OfflineError(`offline: ${p} needs internet`);
         const row = st.syncGet(p);
         if (!row || row.type !== 'file' || row.uid === null || row.rsize === null || row.rmtime === null) {
             throw new Error(`missing baseline facts: ${p}`);
         }
-        await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
+        try {
+            await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
+        } catch (e) {
+            // a black-holed link (probe still "up"): classify the real failure so
+            // the *next* open fails fast too (auth is not a connectivity problem)
+            if (!remote.isAuthError(e)) reportNetworkError(e);
+            throw e;
+        }
         st.onlineDel(p); // keep the marker if the download failed (I5)
+        reportSuccess();
         log('INFO', `hydrate: ${p} materialized`);
     })().finally(() => hydrating.delete(p));
     hydrating.set(p, job);
@@ -278,9 +310,13 @@ async function mvPlaceholder(from: string, to: string): Promise<void> {
     const row = st.syncGet(from);
     if (!row || row.type !== 'file') throw new Error(`no such synced file: ${from}`);
     if (!st.onlineHas(from)) throw new Error(`not a placeholder: ${from}`);
-    if (st.syncGet(to) || st.onlineHas(to) || existsSync(absOf(to))) throw new Error(`target already exists: ${to}`);
     const nameChanged = baseName(to) !== baseName(from);
     const parentChanged = parentRel(to) !== parentRel(from);
+    // a placeholder rename with a real move needs the remote API; offline fail
+    // fast, before the target checks, and mutate nothing (a local-only row rename
+    // would desync the baseline from remote - I3)
+    if ((nameChanged || parentChanged) && isOffline()) throw new OfflineError(`offline: cannot rename ${from} until you reconnect`);
+    if (st.syncGet(to) || st.onlineHas(to) || existsSync(absOf(to))) throw new Error(`target already exists: ${to}`);
     if (nameChanged || parentChanged) {
         if (row.uid === null) throw new Error(`missing remote id: ${from}`);
         let newParentUid: string | null = null;
@@ -300,6 +336,9 @@ async function trashPlaceholder(p: string): Promise<void> {
     if (!st.onlineHas(p)) throw new Error(`not a placeholder: ${p}`);
     const row = st.syncGet(p);
     if (row?.type === 'dir') throw new Error(`not a file: ${p}`);
+    // trashing a placeholder needs the remote API; offline fail fast with nothing
+    // mutated (row + marker + cache all stay, I3/I5) - including a row with no uid
+    if (isOffline()) throw new OfflineError(`offline: cannot move ${p} to trash until you reconnect`);
     if (row && row.uid) {
         await remote.trashRemoteUid(row.uid);
         remote.cacheRemoveSubtree(p);
@@ -427,10 +466,17 @@ async function pinFiles(reqs: string[]): Promise<PinResult[]> {
     const rows = st.syncAll();
     const { targets, notes } = expandTargets(reqs, rows);
     const results: PinResult[] = [...notes];
+    // any placeholder pin needs the remote API to download; offline collapse to
+    // one clear "needs internet" per file instead of N SDK-retry failures
+    const offline = isOffline();
     for (const p of targets) {
         if (st.onlineGet(p) === null) {
             st.pinnedSet(p); // Keep on This Device, even when it never left
             results.push({ path: p, ok: true, note: 'already on this device' });
+            continue;
+        }
+        if (offline) {
+            results.push({ path: p, ok: false, note: 'offline: needs internet' });
             continue;
         }
         const row = st.syncGet(p);
@@ -442,9 +488,11 @@ async function pinFiles(reqs: string[]): Promise<PinResult[]> {
             await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
             st.onlineDel(p); // keep the marker if the download failed (I5)
             st.pinnedSet(p); // keep-mark survives materialization; auto-evict must never free this
+            reportSuccess();
             results.push({ path: p, ok: true, note: 'restored' });
         } catch (e) {
             const why = remote.errMsg(e);
+            if (!remote.isAuthError(e)) reportNetworkError(e);
             results.push({ path: p, ok: false, note: `download failed: ${why}` });
             log('ERROR', `pin ${p}: ${why}`);
         }
@@ -475,6 +523,18 @@ async function daemon(): Promise<void> {
     let timerArmedAt = 0;
     let lastPassStartedAt = 0;
 
+    // Initial-pass barrier + shutdown signals, declared here so the signal handlers
+    // below can resolve them (unblocking handlers waiting on startup/retry).
+    let initialPassDone = false;
+    let initialPassResolve: () => void = () => {};
+    const initialPass = new Promise<void>((resolve) => {
+        initialPassResolve = resolve;
+    });
+    let stopInitResolve: () => void = () => {};
+    const stopInit = new Promise<void>((resolve) => {
+        stopInitResolve = resolve;
+    });
+
     // --- graceful shutdown: finish the in-flight file, then unwind ----------
     // Handlers are registered before the mount and initial pass so a SIGTERM at
     // login also drains instead of hard-killing the process mid-upload.
@@ -504,9 +564,14 @@ async function daemon(): Promise<void> {
         if (timer) clearTimeout(timer);
         if (pollTimer) clearInterval(pollTimer);
         if (watch) watch.stop();
+        stopMonitor();
         if (eventsStarted) remote.stopEventLoop();
         if (rpcStarted) stopRpcServer();
         requestStop();
+        // unblock any handler awaiting the initial pass, and abandon an in-flight
+        // initRemote attempt so shutdown never waits on a stuck connection
+        initialPassResolve();
+        stopInitResolve();
         void drainAndStop();
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
@@ -537,12 +602,16 @@ async function daemon(): Promise<void> {
         }, delayMs);
     };
 
+    // Initial-pass barrier + offline hooks (declared at the top of daemon()).
     const doPass = async (): Promise<void> => {
         if (stopping) return;
         if (passing) {
             pending = true;
             return;
         }
+        // offline: never schedule a pass that would just spam scan/upload errors;
+        // the reconnect hook runs a forced full pass once connectivity returns
+        if (isOffline()) return;
         passing = true;
         lastPassStartedAt = Date.now();
         setStatus({ state: 'passing' });
@@ -553,10 +622,12 @@ async function daemon(): Promise<void> {
             loadFilters();
             const s = await runPass({ forceFull: false });
             if (s.authFailed) log('ERROR', 'authentication required; will retry on the next change (re-login via the official proton-drive CLI if this persists)');
+            else if (!s.errors) reportSuccess();
             maybeAutoEvict(new Set(hydrating.keys()));
             kickEmblems();
         } catch (e) {
             log('ERROR', 'pass crashed', e);
+            reportNetworkError(e);
             setStatus({ state: 'running', progress: null, lastError: e instanceof Error ? e.message : String(e) });
         } finally {
             passing = false;
@@ -567,41 +638,9 @@ async function daemon(): Promise<void> {
         }
     };
 
-    log('INFO', 'starting FUSE mount...');
-    const mounted = await startMount();
-    if (!mounted.ok) log('ERROR', 'mount degraded: users see an empty folder until the mount comes up');
-    monitorMount();
-
-    // shutdown requested while bringing the mount up: skip the initial walk
-    if (stopping) {
-        await shutdownDone;
-        return;
-    }
-
-    log('INFO', 'initial full pass...');
-    passing = true;
-    lastPassStartedAt = Date.now();
-    setStatus({ state: 'passing' });
-    try {
-        const s = await runPass({ forceFull: true });
-        if (s.authFailed) throw new Error(`initial sync failed: ${s.lastError}`);
-    } finally {
-        passing = false;
-    }
-
-    // shutdown requested during the initial pass: do not start the pumps
-    if (stopping) {
-        await shutdownDone;
-        return;
-    }
-
-    setStatus({ state: 'running', prefetch: prefetchEffective() });
-    maybeAutoEvict(new Set(hydrating.keys()));
-    kickEmblems();
-    log('INFO', 'initial pass done; starting event loop and watcher (no periodic full walk)');
-
     // Ensure at least one pass has *started and finished* after the call time.
     const ensureFresh = async (): Promise<void> => {
+        if (isOffline()) throw new Error('offline');
         const t0 = Date.now();
         schedule(0);
         while (!(lastPassStartedAt >= t0 && !passing)) {
@@ -621,81 +660,218 @@ async function daemon(): Promise<void> {
             counts: { ...status.counts, placeholders: st.onlineCount(), reclaimable: st.reclaimableBytes() },
         });
     };
-    startRpcServer({
-        pin: async (paths) => {
-            const results = await pinFiles(paths);
-            afterRpc();
-            return results;
-        },
-        unpin: async (paths) => {
-            const results = await unpinFiles(paths, ensureFresh);
-            afterRpc();
-            return results;
-        },
-        evict: async (paths) => {
-            // never free unsynced bytes: run/await a pass first (I4, same rule as unpin)
-            await ensureFresh();
-            const all = paths.length === 1 && paths[0] === '*';
-            let targets: string[] | null = null;
-            const notes: PinResult[] = [];
-            if (!all) {
-                const exp = expandTargets(paths, st.syncAll());
-                targets = exp.targets;
-                notes.push(...exp.notes);
-            }
-            const out = evictAll({ targets, busy: new Set(hydrating.keys()) });
-            log('INFO', `evict: ${evictSummary(out)}`);
-            notify(
-                out.freed > 0
-                    ? `Freed ${fmtBytes(out.bytes)} — ${out.freed} file(s) are now online-only.\n` +
-                          (out.kept > 0 || out.dirty > 0
-                              ? `${out.kept} kept on this device and ${out.dirty} with unsynced changes were left local.`
-                              : '')
-                    : 'Nothing to free: files are already online-only, unsynced, or kept on this device.',
-            );
-            afterRpc();
-            return [...notes, { path: all ? 'all local copies' : `${targets?.length ?? 0} file(s)`, ok: true, note: evictSummary(out) }];
-        },
-        prefetch: async (paths) => {
-            const v = paths[0];
-            if (v === 'status') return [{ path: 'prefetch', ok: true, note: prefetchEffective() ? 'on' : 'off' }];
-            if (v !== 'on' && v !== 'off') throw new Error('usage: prefetch on|off|status');
-            st.metaSet('prefetch', v);
-            log(
-                'INFO',
-                v === 'on'
-                    ? 'prefetch on: looking up a placeholder now triggers a background recall (materializes)'
-                    : 'prefetch off: placeholders recall only on open (default)',
-            );
-            afterRpc();
-            return [{ path: 'prefetch', ok: true, note: `now ${v}` }];
-        },
-        hydrate: async (paths) => {
-            const p = paths[0];
-            await hydrateOne(p);
-            afterRpc();
-            return [{ path: p, ok: true, note: 'hydrated' }];
-        },
-        mv: async (paths) => {
-            const [from, to] = paths;
-            await mvPlaceholder(from, to);
-            afterRpc();
-            return [{ path: from, ok: true, note: `moved to ${to}` }];
-        },
-        trash: async (paths) => {
-            const p = paths[0];
-            await trashPlaceholder(p);
-            afterRpc();
-            return [{ path: p, ok: true, note: 'trashed' }];
-        },
-        list: async (paths) => listDirStatus(paths[0]),
-        sync: async () => {
-            // the GUI "Sync now": same as SIGUSR1, but without assuming systemd
-            schedule(0);
-            return [{ path: 'sync', ok: true, note: 'scheduled' }];
-        },
+
+    // --- startup: mount first, then reach the API (offline must not crash) ---
+    //
+    // The mount is independent of connectivity (placeholders are served from the
+    // baseline db), so the folder stays browsable offline. initRemote is retried
+    // with backoff instead of triggering a systemd crash loop, and the RPC surface
+    // opens immediately so the sidecar can fast-fail opens with ENETDOWN.
+    log('INFO', 'starting FUSE mount...');
+    const mounted = await startMount();
+    if (!mounted.ok) log('ERROR', 'mount degraded: users see an empty folder until the mount comes up');
+    monitorMount();
+
+    let ready = false;
+    let initWakeRequested = false;
+    remote.onConnectivity({ paused: sdkPaused, resumed: sdkResumed });
+    startMonitor(() => {
+        // connectivity returned: wake the boot retry loop immediately, then (once
+        // the daemon is live) reconcile with one forced full pass (safe: I5 keeps
+        // every marker)
+        initWakeRequested = true;
+        remote.requestForceFull();
+        if (ready) schedule(0);
     });
-    rpcStarted = true;
+
+    // shutdown requested while bringing the mount up: skip the initial walk
+    if (stopping) {
+        stopMonitor();
+        await shutdownDone;
+        return;
+    }
+
+    // Preserves the pre-existing "an operation that races the initial pass waits
+    // for it" semantics now that the RPC socket opens during startup. Offline is
+    // handled per-op (each op has its own offline behaviour) and a shutting-down
+    // engine refuses to start new work (shutdown resolves `initialPass` to unblock
+    // waiters, so the post-await `stopping` check is essential).
+    const readyForOp = async (): Promise<void> => {
+        if (stopping) throw new Error('engine is stopping');
+        if (initialPassDone || isOffline()) return;
+        await initialPass;
+        if (stopping) throw new Error('engine is stopping');
+    };
+
+    let rpcStartedLocal = false;
+    const startRpc = (): void => {
+        if (rpcStartedLocal) return;
+        startRpcServer({
+            pin: async (paths) => {
+                await readyForOp();
+                const results = await pinFiles(paths); // offline -> 'offline: needs internet' per file
+                afterRpc();
+                return results;
+            },
+            unpin: async (paths) => {
+                // freeing local bytes is a local op; offline still works for the
+                // files whose baseline is steady (dirty ones fail cleanly)
+                await readyForOp();
+                const results = await unpinFiles(paths, ensureFresh);
+                afterRpc();
+                return results;
+            },
+            evict: async (paths) => {
+                // evictAll re-verifies clean+steady itself, so the ensureFresh
+                // pass (which needs the network) is only needed while online
+                await readyForOp();
+                if (!isOffline()) {
+                    // never free unsynced bytes: run/await a pass first (I4)
+                    await ensureFresh();
+                }
+                const all = paths.length === 1 && paths[0] === '*';
+                let targets: string[] | null = null;
+                const notes: PinResult[] = [];
+                if (!all) {
+                    const exp = expandTargets(paths, st.syncAll());
+                    targets = exp.targets;
+                    notes.push(...exp.notes);
+                }
+                const out = evictAll({ targets, busy: new Set(hydrating.keys()) });
+                log('INFO', `evict: ${evictSummary(out)}`);
+                notify(
+                    out.freed > 0
+                        ? `Freed ${fmtBytes(out.bytes)} — ${out.freed} file(s) are now online-only.\n` +
+                              (out.kept > 0 || out.dirty > 0
+                                  ? `${out.kept} kept on this device and ${out.dirty} with unsynced changes were left local.`
+                                  : '')
+                        : 'Nothing to free: files are already online-only, unsynced, or kept on this device.',
+                );
+                afterRpc();
+                return [...notes, { path: all ? 'all local copies' : `${targets?.length ?? 0} file(s)`, ok: true, note: evictSummary(out) }];
+            },
+            prefetch: async (paths) => {
+                const v = paths[0];
+                if (v === 'status') return [{ path: 'prefetch', ok: true, note: prefetchEffective() ? 'on' : 'off' }];
+                if (v !== 'on' && v !== 'off') throw new Error('usage: prefetch on|off|status');
+                st.metaSet('prefetch', v);
+                log(
+                    'INFO',
+                    v === 'on'
+                        ? 'prefetch on: looking up a placeholder now triggers a background recall (materializes)'
+                        : 'prefetch off: placeholders recall only on open (default)',
+                );
+                afterRpc();
+                return [{ path: 'prefetch', ok: true, note: `now ${v}` }];
+            },
+            hydrate: async (paths) => {
+                await readyForOp();
+                const p = paths[0];
+                await hydrateOne(p); // offline -> OfflineError -> ENETDOWN
+                afterRpc();
+                return [{ path: p, ok: true, note: 'hydrated' }];
+            },
+            mv: async (paths) => {
+                await readyForOp();
+                const [from, to] = paths;
+                await mvPlaceholder(from, to); // offline -> OfflineError
+                afterRpc();
+                return [{ path: from, ok: true, note: `moved to ${to}` }];
+            },
+            trash: async (paths) => {
+                await readyForOp();
+                const p = paths[0];
+                await trashPlaceholder(p); // offline -> OfflineError
+                afterRpc();
+                return [{ path: p, ok: true, note: 'trashed' }];
+            },
+            list: async (paths) => listDirStatus(paths[0]),
+            sync: async () => {
+                // the GUI "Sync now": same as SIGUSR1, but without assuming systemd
+                schedule(0);
+                return [{ path: 'sync', ok: true, note: 'scheduled' }];
+            },
+        });
+        rpcStartedLocal = true;
+        rpcStarted = true;
+    };
+    startRpc(); // available during init and offline so opens fast-fail with ENETDOWN
+
+    // connect to Proton Drive, retrying with backoff; never exit on connectivity
+    let initDelay = reconnectInitMinMs();
+    for (;;) {
+        if (stopping) {
+            stopMonitor();
+            await shutdownDone;
+            return;
+        }
+        try {
+            const attempt = remote.initRemote();
+            // a shutdown may abandon this attempt; swallow its eventual rejection
+            attempt.catch(() => {
+                /* abandoned on shutdown */
+            });
+            await Promise.race([attempt, stopInit]);
+            if (stopping) break;
+            reportSuccess();
+            break;
+        } catch (e) {
+            if (remote.isAuthError(e)) {
+                log('WARN', `authentication required (run: phnx-drive-sync login): ${remote.errMsg(e)}`);
+                setStatus({ state: 'auth-required', lastError: remote.errMsg(e) });
+            } else if (remote.isNetworkError(e)) {
+                log('WARN', `offline: cannot reach Proton Drive (retrying in ${Math.round(initDelay / 1000)}s): ${remote.errMsg(e)}`);
+                setOffline(true, 'boot');
+            } else {
+                // not a connectivity problem: retry without claiming to be offline
+                log('ERROR', `remote init failed (retrying): ${remote.errMsg(e)}`);
+            }
+            const deadline = Date.now() + initDelay;
+            initDelay = Math.min(reconnectInitMaxMs(), initDelay * 2);
+            while (!stopping && !initWakeRequested && Date.now() < deadline) {
+                await remote.sleep(Math.min(500, deadline - Date.now()));
+            }
+            if (initWakeRequested) {
+                // a connectivity edge woke us: retry promptly, not at the backoff ceiling
+                initWakeRequested = false;
+                initDelay = reconnectInitMinMs();
+            }
+        }
+    }
+
+    if (stopping) {
+        stopMonitor();
+        await shutdownDone;
+        return;
+    }
+
+    log('INFO', 'initial full pass...');
+    passing = true;
+    lastPassStartedAt = Date.now();
+    setStatus({ state: 'passing' });
+    try {
+        const s = await runPass({ forceFull: true });
+        if (s.authFailed) throw new Error(`initial sync failed: ${s.lastError}`);
+        if (!s.errors) reportSuccess();
+    } finally {
+        passing = false;
+        initialPassDone = true;
+        initialPassResolve();
+    }
+
+    // shutdown requested during the initial pass: do not start the pumps
+    if (stopping) {
+        stopMonitor();
+        await shutdownDone;
+        return;
+    }
+
+    setStatus({ state: 'running', prefetch: prefetchEffective() });
+    maybeAutoEvict(new Set(hydrating.keys()));
+    kickEmblems();
+    ready = true;
+    log('INFO', 'initial pass done; starting event loop and watcher (no periodic full walk)');
+
 
     syncNowHook = () => {
         if (stopping) return;

@@ -507,6 +507,31 @@ until the threshold clears, and a `notify-send` report says what was freed.
 materialize as placeholders instead of downloading (folders still materialize).
 Default `local` = download, as before.
 
+### Offline behavior
+
+The mount does not depend on connectivity: placeholders are served from the
+baseline db, so `~/Proton Drive` stays browsable with the network down, and the
+engine **never exits because it cannot reach the API** (at login it mounts first,
+then retries the API with backoff instead of crash-looping).
+
+While the engine believes it is offline, opening an online-only file fails
+**immediately** with `ENETDOWN` ("Network is down") instead of hanging through the
+SDK's retries and returning `EIO` ("Input/output error"). The same fast failure
+applies to renaming/trashing a placeholder, and `pin` reports a single
+`you're offline - N file(s) need internet to download.` Any state stays safe: the
+online-only marker is kept on failure (I5), no `.part` temp is left behind, and a
+retry after reconnect downloads normally. When connectivity returns, the engine
+runs one reconciling full pass automatically; recall-on-hover is dropped (not
+queued) while offline.
+
+Offline is detected three ways and combined (a *hint*, never a guarantee): a cheap
+kernel link probe (default route + carrier), the SDK's own `transfersPaused`/
+`transfersResumed` events, and classification of a real network failure. A
+black-holed link that still looks "up" is caught by the last one, so the first
+open after such a failure can still be slow, but every following open fails fast.
+The tray shows "Offline - reconnecting..." and the file manager shows an offline
+banner; a desktop notification is sent once per offline/online transition.
+
 ### Sidecar requirements
 
 `python3`, `fusermount3`/`libfuse3`, and `pyfuse3`, `trio`, `cffi` importable
@@ -566,7 +591,8 @@ bytes a bulk free could still reclaim - what the tray storage line shows), plus
 read by the tray icon). While a pass runs, `progress: {current, done, total}`
 names the item in flight (`null` when idle); the tray shows it with an
 `(done/total)` counter under the status line. A degraded FUSE mount surfaces as
-`mount` (the tray and GUI read it to show "Mount degraded").
+`mount` (the tray and GUI read it to show "Mount degraded"), and connectivity as
+`offline` + `offlineSince` (the tray/GUI show the offline state).
 
 ### Environment variables
 
@@ -583,6 +609,12 @@ names the item in flight (`null` when idle); the tray shows it with an
 | `PHNX_DRIVE_SYNC_POLL_MS` | `120000` | Watcher-unhealthy safety poll interval; `0` disables. |
 | `PHNX_DRIVE_SYNC_SHUTDOWN_GRACE_MS` | `120000` | Stop-grace for the in-flight file operation; keep the systemd unit's `TimeoutStopSec` above it. |
 | `PHNX_DRIVE_SYNC_EMBLEMS` | on | Set `off` to disable Nautilus badges. |
+| `PHNX_DRIVE_SYNC_CONNECTIVITY_POLL_MS` | `5000` | Kernel link-probe interval for proactive offline detection; `0` disables the probe (reactive fast-fail still applies). |
+| `PHNX_DRIVE_SYNC_RECONNECT_MIN_MS` | `5000` | First API-reconnect delay after an offline boot; doubles up to the max. |
+| `PHNX_DRIVE_SYNC_RECONNECT_MAX_MS` | `120000` | Ceiling for the API-reconnect backoff. |
+| `PHNX_DRIVE_SYNC_OFFLINE_NOTIFY_COOLDOWN_MS` | `1800000` | Minimum gap between offline transition notifications (30 min). |
+| `PHNX_DRIVE_SYNC_RPC_CONNECT_TIMEOUT_S` | `10` | Sidecar: how long a recall may wait for the engine's RPC socket before failing `ENOTCONN`. |
+| `PHNX_DRIVE_SYNC_RPC_RESPONSE_TIMEOUT_S` | `1800` | Sidecar: how long a recall may wait for the engine's answer (large-file headroom). |
 | `PHNX_DRIVE_SYNC_RELEASE_URL` | GitHub releases | Release host/mirror for `update`. |
 | `PHNX_DRIVE_SYNC_LIBDIR` | auto | Internal: where shipped resources (`python/`, `assets/`, `tray/`, `gui/`) are found. |
 
@@ -653,13 +685,23 @@ and recover either automatically (a token refresh) or after a re-login plus a
 restart. The full behavior, the session states and the recovery steps are in
 [Authentication and sessions](#authentication-and-sessions).
 
+### Offline
+
+At login with no network the engine still mounts `~/Proton Drive` (placeholders
+are served from the baseline db), reports `offline` in `status.json`, and retries
+the API with backoff instead of exiting - so the unit stays `active` and there is
+no systemd restart loop. Opening an online-only file returns `ENETDOWN`
+immediately; once connectivity returns the engine finishes the API handshake and
+runs one reconciling pass. See [Offline behavior](#offline-behavior).
+
 ## Development
 
 ```sh
 bun run deps                        # install vendored dependency trees (cli + SDK + account SDK)
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
-bun test test/                      # classify/placeholder/evict/listing unit tests (temp state)
+bun test test/                      # classify/placeholder/evict/offline/connectivity unit tests (temp state)
 ./phnx-drive-sync.sh once --dry-run    # classify without changing anything
+python3 test/test_sidecar_offline.py   # sidecar offline errno + RPC contract (stubs pyfuse3/trio)
 xvfb-run -a python3 -m unittest discover -s test/gui  # GUI unit tests (widget tests need a display)
 xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check  # headless GUI smoke
 ruff check .                        # lint the Python GUI, tray and tests

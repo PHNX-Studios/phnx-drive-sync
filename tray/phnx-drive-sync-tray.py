@@ -233,6 +233,8 @@ def fetch_state():
 
     if mount_degraded(active) and state in ("idle", "syncing"):
         state, detail = "error", "Mount degraded - folder not available"
+    elif status.get("offline") and active and state in ("idle", "syncing"):
+        state, detail = "paused", "Offline - reconnecting..."
 
     used_text, online_text, reclaim_text = storage_fields(status)
     return {

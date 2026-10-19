@@ -97,6 +97,35 @@ export function emblemsEnabled(): boolean {
     return !/^(0|off|false|no)$/i.test((envAlias('EMBLEMS') ?? '').trim());
 }
 
+/**
+ * Connectivity poll interval (ms). A cheap kernel-level link probe (default
+ * route present + a non-loopback interface with carrier) runs at this cadence so
+ * a known-offline placeholder open fails instantly instead of after the SDK's
+ * retries. 0 disables the proactive probe (reactive fast-fail still applies).
+ */
+export function connectivityPollMs(): number {
+    const v = Number(envAlias('CONNECTIVITY_POLL_MS') || 5000);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** Boot reconnect backoff: first retry delay (ms) and ceiling (ms) while the API is unreachable. */
+export function reconnectInitMinMs(): number {
+    const v = Number(envAlias('RECONNECT_MIN_MS') || 5000);
+    return Number.isFinite(v) && v > 0 ? v : 5000;
+}
+
+export function reconnectInitMaxMs(): number {
+    const v = Number(envAlias('RECONNECT_MAX_MS') || 120_000);
+    const min = reconnectInitMinMs();
+    return Number.isFinite(v) && v >= min ? v : Math.max(min, 120_000);
+}
+
+/** Minimum gap between dynamic offline transitions (ms). */
+export function offlineNotifyCooldownMs(): number {
+    const v = Number(envAlias('OFFLINE_NOTIFY_COOLDOWN_MS') || 30 * 60_000);
+    return Number.isFinite(v) && v >= 0 ? v : 30 * 60_000;
+}
+
 export function isPartial(rel: string): boolean {
     return rel.endsWith(partialSuffix);
 }

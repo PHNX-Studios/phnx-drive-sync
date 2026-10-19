@@ -23,6 +23,13 @@ Metadata policy: sizes/mtimes for placeholders come from the `sync` baseline;
 mode/uid/gid are this process's (not stored in state.db). Nothing else is
 invented. entry/attr timeouts are 0: every op consults tree + baseline, so
 pin/unpin under the mount is always observed immediately.
+
+Offline policy: when the engine knows it is offline, a hydrate/mv/trash RPC
+fails fast with a structured `code: "offline"` (instead of hanging through the
+SDK's retries) and this sidecar maps it to ENETDOWN so the application sees
+"Network is down" rather than "Input/output error". A missing/unresponsive
+engine socket is bounded by a connect budget and maps to ENOTCONN, so an open
+never blocks indefinitely. Recall-on-hover/prefetch is dropped while offline.
 """
 
 import argparse
@@ -219,36 +226,104 @@ def fs_attrs(rel: str):
 
 # ---------------------------------------------------------------- engine rpc
 
-def rpc(op: str, paths: list):
-    """One JSON-line request; blocks (minutes) until the engine answers.
+# A hydrate can legitimately take minutes for a large file, so the response
+# timeout is generous; the connect budget is short so a dead engine cannot block
+# an open forever (it maps to ENOTCONN).
+def _env_seconds(*names, default: float) -> float:
+    for name in names:
+        raw = os.environ.get(name)
+        if raw:
+            try:
+                return float(raw)
+            except ValueError:
+                pass
+    return default
 
-    Retries connect until the engine's RPC socket exists (it opens after the
-    initial pass) unless the sidecar is stopping.
+
+RPC_CONNECT_TIMEOUT_S = _env_seconds(
+    'PHNX_DRIVE_SYNC_RPC_CONNECT_TIMEOUT_S', 'DRIVE_SYNC_RPC_CONNECT_TIMEOUT_S', default=10.0
+)
+RPC_RESPONSE_TIMEOUT_S = _env_seconds(
+    'PHNX_DRIVE_SYNC_RPC_RESPONSE_TIMEOUT_S', 'DRIVE_SYNC_RPC_RESPONSE_TIMEOUT_S', default=1800.0
+)
+
+
+class SidecarOffline(RuntimeError):
+    """The engine knows the network is down; maps to ENETDOWN."""
+
+
+class EngineUnreachable(RuntimeError):
+    """The engine socket is absent/unresponsive; maps to ENOTCONN."""
+
+
+class EngineAuth(RuntimeError):
+    """The engine session is invalid; maps to EACCES (never fall back to a local op)."""
+
+
+# Last connectivity the engine reported (stamped on every RPC response); gates
+# recall-on-hover so a hover storm while offline does not issue RPCs.
+ENGINE_OFFLINE = False
+
+
+def rpc(op: str, paths: list):
+    """One JSON-line request; blocks until the engine answers.
+
+    Bounded: connect retries until the engine's RPC socket exists (it opens
+    before the initial pass), but only within RPC_CONNECT_TIMEOUT_S; a response
+    is awaited for up to RPC_RESPONSE_TIMEOUT_S. Nonexistence of the socket or a
+    timeout raise EngineUnreachable; a structured offline failure raises
+    SidecarOffline.
     """
+    global ENGINE_OFFLINE
     payload = (json.dumps({'op': op, 'paths': paths}) + '\n').encode()
+    deadline = time.monotonic() + RPC_CONNECT_TIMEOUT_S
     while True:
         if STOPPING:
             raise RuntimeError('sidecar is stopping')
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
+            sock.settimeout(max(0.0, deadline - time.monotonic()))
             sock.connect(RPC)
             break
-        except OSError:
+        except OSError as e:
             sock.close()
-            time.sleep(1)
+            if time.monotonic() >= deadline:
+                raise EngineUnreachable(f'engine socket unavailable: {RPC}') from e
+            time.sleep(0.5)
     try:
         sock.sendall(payload)
+        sock.settimeout(RPC_RESPONSE_TIMEOUT_S)
         buf = b''
         while b'\n' not in buf:
             chunk = sock.recv(65536)
             if not chunk:
-                raise RuntimeError('engine closed the connection')
+                raise EngineUnreachable('engine closed the connection')
             buf += chunk
+    except socket.timeout as e:
+        raise EngineUnreachable(f'engine did not respond within {RPC_RESPONSE_TIMEOUT_S}s') from e
     finally:
         sock.close()
     resp = json.loads(buf.split(b'\n', 1)[0].decode())
+    ENGINE_OFFLINE = bool(resp.get('offline', False))
     if not resp.get('ok'):
+        if resp.get('code') == 'offline':
+            raise SidecarOffline(resp.get('error') or 'offline')
+        if resp.get('code') == 'auth':
+            raise EngineAuth(resp.get('error') or 'authentication required')
         raise RuntimeError(resp.get('error') or f'{op} failed')
+
+
+def fuse_err_for(e: BaseException) -> pyfuse3.FUSEError:
+    """Map an engine-RPC failure to the errno the kernel should report."""
+    if isinstance(e, SidecarOffline):
+        return pyfuse3.FUSEError(errno.ENETDOWN)
+    if isinstance(e, EngineUnreachable):
+        return pyfuse3.FUSEError(errno.ENOTCONN)
+    if isinstance(e, EngineAuth):
+        return pyfuse3.FUSEError(errno.EACCES)
+    if isinstance(e, OSError):
+        return pyfuse3.FUSEError(e.errno or errno.EIO)
+    return pyfuse3.FUSEError(errno.EIO)
 
 
 async def hydrate(rel: str):
@@ -282,7 +357,9 @@ def _pump_prefetch():
 
 
 def _schedule_prefetch(rel: str):
-    if STOPPING or NURSERY is None or rel in PREFETCH_INFLIGHT or rel in PREFETCH_QUEUE:
+    # offline: drop (never queue) - the open path already fails fast with ENETDOWN
+    # and a reconnect-flood of downloads is worse than a missed hover recall
+    if ENGINE_OFFLINE or STOPPING or NURSERY is None or rel in PREFETCH_INFLIGHT or rel in PREFETCH_QUEUE:
         return
     PREFETCH_QUEUE.append(rel)
     _pump_prefetch()
@@ -292,6 +369,8 @@ async def _prefetch_job(rel: str):
     try:
         await trio.to_thread.run_sync(lambda: rpc('hydrate', [rel]))
         logging.info('prefetch: %s materialized', rel)
+    except SidecarOffline:
+        pass  # offline: the open path reports it; a hover is not worth a warning
     except Exception as e:  # engine down / stopping: best effort, the open path still blocks
         logging.warning('prefetch: %s failed: %s', rel, e)
     finally:
@@ -370,7 +449,11 @@ class Ops(pyfuse3.Operations):
         if not on_tree(rel):
             if placeholder_of(rel) is None:
                 raise pyfuse3.FUSEError(errno.ENOENT)
-            await hydrate(rel)
+            try:
+                await hydrate(rel)
+            except RuntimeError as e:
+                # offline -> ENETDOWN, engine gone -> ENOTCONN: never hang, never EIO
+                raise fuse_err_for(e) from e
             if not on_tree(rel):
                 raise pyfuse3.FUSEError(errno.EIO)
         try:
@@ -432,7 +515,10 @@ class Ops(pyfuse3.Operations):
             except OSError as e:
                 raise fuse_err(e)
         if placeholder_of(rel) is not None:
-            await trio.to_thread.run_sync(lambda: rpc('trash', [rel]))
+            try:
+                await trio.to_thread.run_sync(lambda: rpc('trash', [rel]))
+            except RuntimeError as e:
+                raise fuse_err_for(e) from e
             return
         raise pyfuse3.FUSEError(errno.ENOENT)
 
@@ -451,10 +537,16 @@ class Ops(pyfuse3.Operations):
                 # glib/Nautilus trashes on the same fs by renaming into
                 # .Trash-<uid>/files; a placeholder has no bytes to move, so
                 # translate it into the trash RPC (remote trash + row + marker)
-                await trio.to_thread.run_sync(lambda: rpc('trash', [frm]))
+                try:
+                    await trio.to_thread.run_sync(lambda: rpc('trash', [frm]))
+                except RuntimeError as e:
+                    raise fuse_err_for(e) from e
                 return
             try:
                 await trio.to_thread.run_sync(lambda: rpc('mv', [frm, to]))
+            except (SidecarOffline, EngineUnreachable, EngineAuth) as e:
+                # offline / engine-gone / auth: report it, never fall back to a local op
+                raise fuse_err_for(e) from e
             except RuntimeError as e:
                 # engine reports source is no longer a placeholder (race): fall back
                 if on_tree(frm):
@@ -489,7 +581,10 @@ class Ops(pyfuse3.Operations):
         if not on_tree(rel):
             if placeholder_of(rel) is None:
                 raise pyfuse3.FUSEError(errno.ENOENT)
-            await hydrate(rel)
+            try:
+                await hydrate(rel)
+            except RuntimeError as e:
+                raise fuse_err_for(e) from e
         p = abspath(rel)
         try:
             if fields.update_mode:

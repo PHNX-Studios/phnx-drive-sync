@@ -320,6 +320,8 @@ class MainWindow(Adw.ApplicationWindow):
             message = "Sign in required - run: phnx-drive-sync login"
         elif status.get("mount") == "degraded":
             message = "Mount degraded - the Proton Drive folder is temporarily unavailable"
+        elif status.get("offline"):
+            message = "Offline - files that aren't on this device can't be opened until you reconnect."
         elif status.get("lastError") and state in ("running", "passing"):
             message = f"Last sync error: {status['lastError']}"
         if message:

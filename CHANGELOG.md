@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-19
+
+### Added
+
+- Offline handling for online-only files. When the engine knows it is offline
+  (a kernel link probe, the SDK's `transfersPaused`/`transfersResumed` events, or
+  a classified network failure), opening a placeholder fails immediately with
+  `ENETDOWN` ("Network is down") instead of hanging through the SDK's retries and
+  returning `EIO`. Renaming/trashing a placeholder and `pin` fail fast the same
+  way (nothing is mutated), recall-on-hover drops while offline, the offline
+  state surfaces in `status.json` (`offline`, `offlineSince`), the tray and GUI,
+  and a reconciling full pass runs automatically when connectivity returns.
+- The mount no longer depends on connectivity: at login offline the engine mounts
+  first and retries the API with backoff, so the unit stays active (no systemd
+  restart loop), placeholders stay browsable, and recovery is automatic.
+
+### Changed
+
+- New environment variables: `PHNX_DRIVE_SYNC_CONNECTIVITY_POLL_MS`,
+  `PHNX_DRIVE_SYNC_RECONNECT_MIN_MS`, `PHNX_DRIVE_SYNC_RECONNECT_MAX_MS`,
+  `PHNX_DRIVE_SYNC_OFFLINE_NOTIFY_COOLDOWN_MS`, and the sidecar RPC timeouts
+  `PHNX_DRIVE_SYNC_RPC_CONNECT_TIMEOUT_S` / `PHNX_DRIVE_SYNC_RPC_RESPONSE_TIMEOUT_S`.
+
 ## [0.4.0] - 2026-10-16
 
 ### Changed
