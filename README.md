@@ -178,10 +178,11 @@ The auth-relevant behavior differs by when the failure happens:
   remote event, or the safety poll), so a temporary failure heals itself. The
   tray icon turns red and the GUI shows "auth required" while in this state.
 - **Startup (no session, or it is already invalid).** The engine cannot resolve
-  the remote root without a valid session, so it exits before the first pass. The
-  systemd unit restarts it every 10 s (`Restart=on-failure`), which surfaces as a
-  red "service failed" tray state rather than `auth-required`. The fix is to sign
-  in; the unit then comes up on its own.
+  the remote root without a valid session, so it fails during startup or the
+  initial full pass and exits. The systemd unit restarts it every 10 s
+  (`Restart=on-failure`), which surfaces as a red "service failed" tray state
+  rather than `auth-required`. The fix is to sign in; the unit then comes up on
+  its own.
 - **`once` mode.** Exit code `3` means the pass hit an authentication failure
   (`0` ok, `2` other errors). A missing or invalid session at startup fails
   earlier and exits `1` instead.
@@ -203,9 +204,12 @@ refresh recovers without any action, because the SDK refreshes in place.)
 
 ### Logging out
 
-`proton-drive auth logout` removes the keyring entry. Because the store is
-shared, this signs the engine out too: the next pass enters `auth-required` and
-syncing stops until you sign in again and restart.
+`proton-drive auth logout` removes the keyring entry (and the CLI's local
+caches). A running engine loads the session only at startup, so it is not
+notified of the change and keeps using its in-memory session; it notices only on
+its next restart, when it finds no session and fails to initialize (exiting until
+you sign in again). To sign out completely, run `proton-drive auth logout` and
+restart the engine, for example with `phnx-drive-sync restart`.
 
 ## Install
 
