@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-20
+
+### Fixed
+
+- `./phnx-drive-sync.sh restart` (running from a source checkout) waited on the
+  pre-rename heartbeat path and reported that the FUSE mount did not come up even
+  when it had. It now uses the engine's own `restart`, like the installed
+  launcher, which was not affected.
+
 ## [0.6.0] - 2026-10-20
 
 ### Changed
@@ -147,7 +156,8 @@ First public release.
 - `package.json` is no longer private and uses the vendored TypeScript for
   `typecheck`.
 
-[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.2...v0.4.0
