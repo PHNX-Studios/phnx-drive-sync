@@ -28,6 +28,9 @@ fi
 
 VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' package.json | head -n1)"
 [ -n "$VERSION" ] || { echo "build: could not read version from package.json" >&2; exit 1; }
+SIDECAR_VERSION="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' sidecar/Cargo.toml | head -n1)"
+[ "$SIDECAR_VERSION" = "$VERSION" ] ||
+    { echo "build: sidecar/Cargo.toml is $SIDECAR_VERSION but package.json is $VERSION; bump both" >&2; exit 1; }
 
 case "$(uname -m)" in
     x86_64 | amd64) TARGET=x64; TARBALL_ARCH=x86_64 ;;
