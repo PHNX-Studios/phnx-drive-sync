@@ -100,6 +100,15 @@ def python_sidecar_bug(why):
     return wrap
 
 
+def python_sidecar_flaky(why):
+    """Intermittent defect of the Python sidecar: skipped for it (an expected
+    failure would turn its lucky passes into errors), required for any other."""
+    def wrap(fn):
+        fn.__doc__ = f'Python sidecar flaky bug: {why}'
+        return unittest.skip(f'Python sidecar flaky bug: {why}')(fn) if is_python_sidecar() else fn
+    return wrap
+
+
 def _confined_label():
     """AppArmor label of this process when it is confined, else None."""
     try:

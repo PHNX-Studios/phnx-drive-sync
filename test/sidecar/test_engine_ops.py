@@ -1,6 +1,7 @@
 """Characterization: operations that reach the engine (hydrate, trash, mv) and
 their errno mapping, plus plain passthrough mutations."""
 
+import ctypes
 import errno
 import hashlib
 import os
@@ -16,6 +17,17 @@ MTIME_MS = 1_700_000_000_000
 OFFLINE = {'ok': False, 'code': 'offline', 'error': 'offline: needs internet', 'offline': True}
 AUTH = {'ok': False, 'code': 'auth', 'error': '401 Unauthorized'}
 FAIL = {'ok': False, 'error': 'missing baseline facts'}
+
+
+RENAME_NOREPLACE = 1
+_libc = ctypes.CDLL(None, use_errno=True)
+
+
+def rename_noreplace(src, dst):
+    """renameat2(RENAME_NOREPLACE), as `mv -n` and glib's no-clobber moves use."""
+    if _libc.renameat2(-100, os.fsencode(src), -100, os.fsencode(dst), RENAME_NOREPLACE) != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err), src)
 
 
 def strip_t(reqs):
@@ -330,6 +342,25 @@ class Rename(SidecarTestCase):
     def test_mv_error_without_a_local_file_is_eio(self):
         self.fx.engine.handler = lambda req: dict(FAIL)
         self.assertErrno(errno.EIO, os.rename, self.fx.mnt('remote.txt'), self.fx.mnt('x.txt'))
+
+    # the VFS refuses NOREPLACE onto a name lookup() reports, before rename() runs
+    def test_noreplace_onto_an_existing_file_is_eexist(self):
+        self.fx.write_tree('dest/taken.txt', b'keep me')
+        self.assertErrno(errno.EEXIST, rename_noreplace, self.fx.mnt('local.txt'), self.fx.mnt('dest/taken.txt'))
+        with open(self.fx.tree_path('dest/taken.txt'), 'rb') as f:
+            self.assertEqual(f.read(), b'keep me')
+
+    def test_noreplace_placeholder_onto_an_existing_file_is_eexist(self):
+        self.fx.write_tree('dest/taken.txt', b'keep me')
+        self.assertErrno(errno.EEXIST, rename_noreplace, self.fx.mnt('remote.txt'), self.fx.mnt('dest/taken.txt'))
+        self.assertEqual(self.fx.engine.ops(), [])
+
+    def test_noreplace_onto_a_free_name_renames(self):
+        self.engine_moves()
+        rename_noreplace(self.fx.mnt('local.txt'), self.fx.mnt('dest/free.txt'))
+        rename_noreplace(self.fx.mnt('remote.txt'), self.fx.mnt('dest/free2.txt'))
+        self.assertTrue(os.path.exists(self.fx.tree_path('dest/free.txt')))
+        self.assertEqual(strip_t(self.fx.engine.ops()), [{'op': 'mv', 'paths': ['remote.txt', 'dest/free2.txt']}])
 
     def test_rename_missing_is_enoent(self):
         self.assertErrno(errno.ENOENT, os.rename, self.fx.mnt('nope.txt'), self.fx.mnt('x.txt'))

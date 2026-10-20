@@ -5,10 +5,12 @@ import hashlib
 import os
 import stat
 import sys
+import threading
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from harness import SidecarTestCase, python_sidecar_bug
+from harness import SidecarTestCase, python_sidecar_bug, python_sidecar_flaky
 
 MTIME_MS = 1_700_000_000_123
 
@@ -103,6 +105,36 @@ class ZeroCacheTimeouts(SidecarTestCase):
         self.fx.add_placeholder('flip.txt', 1234, MTIME_MS)
         st = os.stat(self.fx.mnt('flip.txt'))
         self.assertEqual((st.st_size, st.st_blocks), (1234, 0))
+
+    @python_sidecar_flaky('fs_attrs checks tree then baseline once; a hydrate between the two reads as ENOENT')
+    def test_stat_never_misses_a_file_mid_hydrate_or_evict(self):
+        # the engine's orders: hydrate puts the bytes in, then clears the marker;
+        # evict sets the marker, then unlinks. Either way the file always exists
+        # on one side or the other, so a stat must never see ENOENT.
+        stop = threading.Event()
+        misses = []
+
+        def churn():
+            while not stop.is_set():
+                self.fx.materialize('flip.txt', b'12345')
+                self.fx.add_placeholder('flip.txt', 1234, MTIME_MS)
+                os.unlink(self.fx.tree_path('flip.txt'))
+
+        def stat_loop():
+            while not stop.is_set():
+                try:
+                    os.stat(self.fx.mnt('flip.txt'))
+                except FileNotFoundError:
+                    misses.append(1)
+        threads = [threading.Thread(target=churn, daemon=True)] + \
+            [threading.Thread(target=stat_loop, daemon=True) for _ in range(4)]
+        for t in threads:
+            t.start()
+        time.sleep(4.0)
+        stop.set()
+        for t in threads:
+            t.join(5)
+        self.assertEqual(len(misses), 0)
 
     def test_tree_changes_outside_the_mount_are_visible(self):
         self.fx.write_tree('outside.txt', b'abc')
