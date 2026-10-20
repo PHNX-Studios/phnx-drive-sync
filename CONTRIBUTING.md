@@ -11,7 +11,8 @@ unofficial project and is not affiliated with Proton AG.
 - Do not weaken the sync safety invariants. The behavior is documented in the
   README under "Conflict policy" and "Files on demand".
 - `main` is protected: changes land through a pull request and the CI checks
-  (type-check, unit tests, GUI and lint) must pass; force-pushes are rejected.
+  (type-check, unit tests, GUI, lint, FUSE sidecar and the release build) must
+  pass; force-pushes are rejected.
 
 ## Development setup
 
