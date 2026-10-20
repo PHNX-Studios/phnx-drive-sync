@@ -51,7 +51,7 @@ welcome:
   tray and the file manager GUI are all clients of it). The socket must not allow
   other local users to act on your files; report any permission or injection
   issue.
-- **FUSE sidecar.** The Python sidecar materializes on-demand files on read. A
+- **FUSE sidecar.** The sidecar (`phnx-drive-sync-fuse`) materializes on-demand files on read. A
   path-traversal or symlink escape out of the real tree is in scope.
 - **Installer.** `install.sh` fetches and unpacks host packages into `~/.local`
   when it cannot use the system package manager (no root). Report any case where

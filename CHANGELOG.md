@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-20
+
+### Changed
+
+- The FUSE sidecar behind `~/Proton Drive` is now a static Rust binary
+  (`phnx-drive-sync-fuse`) instead of a Python script, with the same mount
+  behavior, RPC contract and environment variables. It needs no Python, pyfuse3,
+  trio or cffi; the installer no longer installs them and removes the copies it
+  pip-installed under `~/.local/share/phnx-drive-sync/python/`. Reads and writes
+  through the mount are 9-35x faster and the sidecar uses about a quarter of the
+  memory.
+- Closing a file through the mount no longer forces it to disk (`fsync`), which
+  had made every close 5-7x slower, including read-only ones. Explicit `fsync`
+  and `fdatasync` calls still reach the disk.
+
+### Fixed
+
+- A file or folder name that is not valid UTF-8 no longer crashes the mount when
+  its directory is listed.
+- A `stat` that raced a download or eviction of the same file could report it as
+  missing (`ENOENT`) for an instant.
+- Stopping the sidecar (SIGTERM/SIGINT) could exit with status 1 instead of
+  143/130, and now also exits promptly while an application waits on a download.
+
 ## [0.5.0] - 2026-10-19
 
 ### Added
@@ -123,7 +147,9 @@ First public release.
 - `package.json` is no longer private and uses the vendored TypeScript for
   `typecheck`.
 
-[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.3.0...v0.3.1

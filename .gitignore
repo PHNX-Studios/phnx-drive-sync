@@ -12,3 +12,6 @@ dist/
 
 # internal development log: contains machine-specific and personal detail
 LEDGER.md
+
+# Rust build output (FUSE sidecar)
+sidecar/target/

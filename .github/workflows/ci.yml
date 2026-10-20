@@ -69,13 +69,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0 xvfb
 
-      - name: Byte-compile the GUI, tray and sidecar
-        run: python3 -m compileall -q python gui tray test/gui test/tray
-
-      # Stubs pyfuse3/trio, so no FUSE mount or GTK is needed; exercises the
-      # sidecar's offline errno mapping and RPC contract.
-      - name: Sidecar offline unit tests
-        run: python3 -m unittest discover -s test -p 'test_sidecar_offline.py' -v
+      - name: Byte-compile the GUI and tray
+        run: python3 -m compileall -q gui tray test/gui test/tray test/sidecar
 
       # Under Xvfb: some tests build real GTK widgets (context-menu buttons, the
       # listing reconcile). With no display those are skipped, and on GTK 4.14
@@ -88,6 +83,39 @@ jobs:
 
       - name: Headless smoke (build the window and exit)
         run: xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check
+
+  sidecar:
+    name: FUSE sidecar characterization
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install FUSE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fuse3
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sidecar
+
+      - name: Rust sidecar (fmt, clippy, unit tests, release build)
+        working-directory: sidecar
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --locked
+          cargo build --release --locked
+
+      # Mounts real FUSE filesystems on temp dirs against a scripted fake engine
+      # (test/sidecar/harness.py); the binary is the release build above.
+      - name: Sidecar characterization tests
+        run: python3 -m unittest discover -s test/sidecar -p 'test_*.py' -v
 
   build:
     name: Build release tarball (${{ matrix.runner }})
@@ -104,8 +132,26 @@ jobs:
         with:
           bun-version: "1.4.2"
 
+      # the FUSE sidecar ships as a static musl binary; musl-tools provides the
+      # musl C compiler for its bundled SQLite
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+
+      - name: Install the musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools fuse3
+
       - name: Build portable tarball
         run: bash packaging/build.sh
+
+      # the shipped static binary, not the dev build: same suite, real artifact
+      - name: Characterization tests against the tarball's sidecar
+        run: |
+          bin="$(find dist -path '*/phnx-drive-sync-*-linux-*/phnx-drive-sync-fuse' -type f | head -n1)"
+          PHNX_SIDECAR_CMD="$PWD/$bin" python3 -m unittest discover -s test/sidecar -p 'test_*.py'
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v7

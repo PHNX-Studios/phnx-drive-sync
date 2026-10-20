@@ -67,10 +67,13 @@ package in the vendored dependency tree is generated at build time into
 release tarball (and installed alongside this file). That generated file is the
 authoritative list for a given release.
 
-The Python sidecar dependencies (`pyfuse3`, `trio`, `cffi`) are **not**
-redistributed with this project: `install.sh` installs them from the host
-distribution's packages or from PyPI into the user's home directory. Their
-licenses are handled by their respective upstreams.
+The FUSE sidecar (`phnx-drive-sync-fuse`) is a statically linked Rust binary.
+It embeds its crate dependencies, notably `fuser` (MIT), `rusqlite` and
+`libsqlite3-sys` (MIT; the bundled SQLite amalgamation is in the public domain),
+`serde_json`, `sha1`, `libc`, `log` and `signal-hook` (MIT OR Apache-2.0)
+and `lexopt` (MIT), and their transitive dependencies. The
+release build appends every crate's declared license and license texts to
+`THIRD_PARTY_LICENSES.txt` (`packaging/collect-crate-licenses.mjs`).
 
 ## GUI and tray runtime dependencies (not redistributed)
 

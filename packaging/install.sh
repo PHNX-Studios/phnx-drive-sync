@@ -62,15 +62,6 @@ APPS_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 NAUTILUS_DIR="$HOME/.local/share/nautilus/scripts/Proton Drive"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-# sidecar python deps live under the app data dir. Use whichever location
-# currently holds them: on an upgrade the legacy dir still holds them until the
-# migration below moves it into place, so pip never targets an empty path.
-PYDIR="$DATA_HOME/phnx-drive-sync/python"
-if command -v python3 >/dev/null 2>&1 &&
-    ! PYTHONPATH="$DATA_HOME/phnx-drive-sync/python" python3 -c 'import pyfuse3' >/dev/null 2>&1 &&
-    PYTHONPATH="$DATA_HOME/drive-sync/python" python3 -c 'import pyfuse3' >/dev/null 2>&1; then
-    PYDIR="$DATA_HOME/drive-sync/python"
-fi
 
 log() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
@@ -81,6 +72,7 @@ die() {
 
 [ -f "$SELF_DIR/VERSION" ] || die "install.sh: VERSION missing; run from the extracted release directory"
 [ -x "$SELF_DIR/phnx-drive-sync-engine" ] || die "install.sh: phnx-drive-sync-engine missing; run from the extracted release directory"
+[ -x "$SELF_DIR/phnx-drive-sync-fuse" ] || die "install.sh: phnx-drive-sync-fuse missing; run from the extracted release directory"
 [ -f "$SELF_DIR/LICENSE" ] || die "install.sh: LICENSE missing; run from the extracted release directory"
 [ -f "$SELF_DIR/THIRD_PARTY_NOTICES.md" ] || die "install.sh: THIRD_PARTY_NOTICES.md missing; run from the extracted release directory"
 NEW_VERSION="$(cat "$SELF_DIR/VERSION")"
@@ -123,7 +115,6 @@ case "$PKG_FAM" in
     debian)
         CORE_PKGS="fuse3 python3 python3-gi inotify-tools libglib2.0-bin gvfs libnotify-bin gnome-keyring"
         APPIND_CANDIDATES="gir1.2-ayatanaappindicator3-0.1 gir1.2-appindicator3-0.1 libayatana-appindicator3-1"
-        PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
         INOTIFY_PKGS="inotify-tools libinotifytools0"
         APPIND_PKGS="gir1.2-ayatanaappindicator3-0.1 libayatana-appindicator3-1 gir1.2-appindicator3-0.1 libappindicator3-1"
         GUI_PKGS="gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0"
@@ -131,7 +122,6 @@ case "$PKG_FAM" in
     rpm)
         CORE_PKGS="fuse3 python3 python3-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
         APPIND_CANDIDATES="libayatana-appindicator-gtk3 typelib(AyatanaAppIndicator3)"
-        PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
         INOTIFY_PKGS="inotify-tools inotify-tools-libs"
         APPIND_PKGS="libayatana-appindicator-gtk3 libappindicator-gtk3"
         GUI_PKGS="gtk4 libadwaita"
@@ -139,7 +129,6 @@ case "$PKG_FAM" in
     suse)
         CORE_PKGS="fuse3 python3 python3-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
         APPIND_CANDIDATES="libayatana-appindicator3-1 typelib(AyatanaAppIndicator3)"
-        PY_PKGS="python3-pyfuse3 python3-trio python3-cffi"
         INOTIFY_PKGS="inotify-tools libinotifytools0"
         APPIND_PKGS="libayatana-appindicator3-1"
         GUI_PKGS="typelib-1_0-Gtk-4_0 libadwaita-1-0 typelib-1_0-Adw-1"
@@ -147,7 +136,6 @@ case "$PKG_FAM" in
     arch)
         CORE_PKGS="fuse3 python python-gobject inotify-tools glib2 gvfs libnotify gnome-keyring"
         APPIND_CANDIDATES="libayatana-appindicator"
-        PY_PKGS="python-pyfuse3 python-trio python-cffi"
         INOTIFY_PKGS="inotify-tools"
         APPIND_PKGS="libayatana-appindicator"
         GUI_PKGS="gtk4 libadwaita"
@@ -155,7 +143,6 @@ case "$PKG_FAM" in
     *)
         CORE_PKGS=""
         APPIND_CANDIDATES=""
-        PY_PKGS=""
         INOTIFY_PKGS=""
         APPIND_PKGS=""
         GUI_PKGS=""
@@ -208,7 +195,6 @@ if [ "$INSTALL_SYSDEPS" -eq 1 ]; then
         fi
         # AppIndicator: only one of the candidate names exists per distro version.
         for p in $APPIND_CANDIDATES; do pkg_try "$p"; done
-        for p in $PY_PKGS; do pkg_try "$p"; done
         # GTK4 + Libadwaita: the file manager GUI toolchain (optional; the engine
         # and tray work without it, the GUI then just will not launch).
         for p in $GUI_PKGS; do pkg_try "$p"; done
@@ -350,24 +336,6 @@ if [ "$INSTALL_USERDEPS" -eq 1 ] && [ "$PKG_FAM" != unknown ]; then
     user_install_appindicator
 fi
 
-# --- Python sidecar deps fallback (files-on-demand) ----------------------
-# Probe including the engine's own PYTHONPATH (deps may already live there).
-if command -v python3 >/dev/null 2>&1 && ! PYTHONPATH="$PYDIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'import pyfuse3, trio, cffi' >/dev/null 2>&1; then
-    log "Installing Python sidecar dependencies into $PYDIR ..."
-    mkdir -p "$PYDIR"
-    PIP_ARGS=(--target "$PYDIR" --upgrade)
-    if [ -d "$SELF_DIR/python/wheels" ]; then
-        PIP_ARGS+=(--no-index --find-links "$SELF_DIR/python/wheels")
-    fi
-    if python3 -m pip --version >/dev/null 2>&1; then
-        if ! python3 -m pip install "${PIP_ARGS[@]}" -r "$SELF_DIR/python/requirements.txt"; then
-            warn "pip install failed; files-on-demand may be unavailable (the mount will degrade)."
-        fi
-    else
-        warn "python3-pip not available; install pyfuse3/trio/cffi via your package manager for files-on-demand."
-    fi
-fi
-
 # --- FUSE readiness (files-on-demand needs the system fuse3 stack) ---------
 # Mounting requires the setuid-root fusermount3 helper, which only the system
 # fuse3 package can provide (a user-level copy cannot be setuid), so this is the
@@ -389,10 +357,6 @@ fuse_check() {
     fi
     if ! command -v fusermount3 >/dev/null 2>&1 && [ ! -x /usr/bin/fusermount3 ] && [ ! -x /bin/fusermount3 ]; then
         warn "FUSE: fusermount3 not installed; the mount needs it  [$hint]"
-        ok=0
-    fi
-    if command -v python3 >/dev/null 2>&1 && ! PYTHONPATH="$PYDIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'import pyfuse3' >/dev/null 2>&1; then
-        warn "FUSE: pyfuse3 is not importable; install python3-pyfuse3 (or 'pip install --user pyfuse3')"
         ok=0
     fi
     if [ -e /dev/fuse ] && [ "$(id -u)" -ne 0 ]; then
@@ -480,6 +444,9 @@ migrate_layout() {
 
 migrate_layout "$DATA_HOME/drive-sync" "$DATA_HOME/phnx-drive-sync"
 migrate_layout "$STATE_BASE/drive-sync" "$STATE_BASE/phnx-drive-sync"
+# pyfuse3/trio/cffi that pre-0.6 installers pip-installed for the Python FUSE
+# sidecar: app code, not user state, and unused since the sidecar became a binary
+rm -rf "$DATA_HOME/phnx-drive-sync/python" "$DATA_HOME/drive-sync/python"
 if [ -f "$STATE_BASE/phnx-drive-sync/drive-sync.log" ] && [ ! -f "$STATE_BASE/phnx-drive-sync/phnx-drive-sync.log" ]; then
     mv "$STATE_BASE/phnx-drive-sync/drive-sync.log" "$STATE_BASE/phnx-drive-sync/phnx-drive-sync.log" 2>/dev/null || true
 fi
@@ -493,7 +460,6 @@ rm -rf "$LIB"
 mkdir -p "$LIB"
 cp -a "$SELF_DIR/phnx-drive-sync-engine" "$LIB/"
 [ -f "$SELF_DIR/proton-drive" ] && cp -a "$SELF_DIR/proton-drive" "$LIB/"
-cp -a "$SELF_DIR/python" "$LIB/"
 cp -a "$SELF_DIR/tray" "$LIB/"
 cp -a "$SELF_DIR/gui" "$LIB/"
 cp -a "$SELF_DIR/assets" "$LIB/"
@@ -504,6 +470,7 @@ cp -a "$SELF_DIR/THIRD_PARTY_LICENSES.txt" "$LIB/THIRD_PARTY_LICENSES.txt" 2>/de
 printf '%s\n' "$NEW_VERSION" > "$LIB/VERSION"
 
 install -m 0755 "$SELF_DIR/phnx-drive-sync-engine" "$LIB/phnx-drive-sync-engine"
+install -m 0755 "$SELF_DIR/phnx-drive-sync-fuse" "$LIB/phnx-drive-sync-fuse"
 ln -sfn "$LIB/phnx-drive-sync-engine" "$BIN/phnx-drive-sync"
 install -m 0755 "$SELF_DIR/share/bin/phnx-drive-sync-tray" "$BIN/phnx-drive-sync-tray"
 install -m 0755 "$SELF_DIR/share/bin/phnx-drive-sync-gui" "$BIN/phnx-drive-sync-gui"
