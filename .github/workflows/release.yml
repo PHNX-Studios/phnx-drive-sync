@@ -22,6 +22,18 @@ jobs:
         with:
           bun-version: "1.4.2"
 
+      # the FUSE sidecar ships as a static musl binary; musl-tools provides the
+      # musl C compiler for its bundled SQLite
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.0"
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+
+      - name: Install the musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
       # build.sh installs the vendored dependency trees itself when missing.
       - name: Build portable tarball
         run: bash packaging/build.sh

@@ -9,7 +9,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from harness import SidecarTestCase, is_mount_point, python_sidecar_flaky, wait_for
+from harness import SidecarTestCase, is_mount_point, wait_for
 
 MTIME_MS = 1_700_000_000_000
 OFFLINE = {'ok': False, 'code': 'offline', 'error': 'offline: needs internet', 'offline': True}
@@ -159,12 +159,10 @@ class Signals(SidecarTestCase):
         self.assertFalse(os.path.exists(self.fx.mount_ok))
         self.assertTrue(wait_for(lambda: not is_mount_point(self.fx.mount)))
 
-    @python_sidecar_flaky('sys.exit from the signal handler can crash trio (TrioInternalError, rc=1)')
     def test_sigterm_unmounts_and_exits_143(self):
         self.fx.proc.send_signal(signal.SIGTERM)
         self.assert_clean_exit(143)
 
-    @python_sidecar_flaky('sys.exit from the signal handler can crash trio (TrioInternalError, rc=1)')
     def test_sigint_unmounts_and_exits_130(self):
         self.fx.proc.send_signal(signal.SIGINT)
         self.assert_clean_exit(130)

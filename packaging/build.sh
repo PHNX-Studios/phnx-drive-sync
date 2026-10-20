@@ -6,11 +6,14 @@
 #   latest.json            (release manifest consumed by `phnx-drive-sync update`)
 #
 # The tarball contains the engine compiled to a self-contained glibc-2.17 binary
-# (Bun runtime + all node_modules + SDK WASM embedded), the bundled login CLI,
-# the Python sidecar/tray sources, assets, units and install.sh.
+# (Bun runtime + all node_modules + SDK WASM embedded), the FUSE sidecar as a
+# static musl binary (no libc dependency at all), the bundled login CLI, the
+# Python tray/GUI sources, assets, units and install.sh.
 #
 # Usage:  packaging/build.sh
-# Env:    BUN=/path/to/bun   RELEASE_BASE_URL=https://host/path
+# Env:    BUN=/path/to/bun   CARGO=/path/to/cargo   RELEASE_BASE_URL=https://host/path
+# Needs:  a Rust toolchain with the <arch>-unknown-linux-musl target and a musl C
+#         compiler for the bundled SQLite (Debian/Ubuntu: musl-tools).
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +34,14 @@ case "$(uname -m)" in
     aarch64 | arm64) TARGET=arm64; TARBALL_ARCH=aarch64 ;;
     *) echo "build: unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
+RUST_TARGET="$TARBALL_ARCH-unknown-linux-musl"
+
+CARGO="${CARGO:-}"
+if [ -z "$CARGO" ]; then
+    if command -v cargo >/dev/null 2>&1; then CARGO="$(command -v cargo)"
+    elif [ -x "$HOME/.cargo/bin/cargo" ]; then CARGO="$HOME/.cargo/bin/cargo"
+    else echo "build: cargo not found (https://rustup.rs); the FUSE sidecar is required" >&2; exit 1; fi
+fi
 
 NAME="phnx-drive-sync-$VERSION-linux-$TARBALL_ARCH"
 STAGE="dist/$NAME"
@@ -59,6 +70,28 @@ echo "build: compiling engine"
     --minify \
     --outfile "$STAGE/phnx-drive-sync-engine"
 
+# --- FUSE sidecar: static musl binary ---------------------------------------
+echo "build: compiling FUSE sidecar ($RUST_TARGET)"
+if command -v rustup >/dev/null 2>&1; then
+    rustup target add "$RUST_TARGET" >/dev/null
+fi
+# the bundled SQLite is C: cc-rs looks for <arch>-linux-musl-gcc, while distros
+# ship the musl wrapper as plain musl-gcc
+CC_VAR="CC_${RUST_TARGET//-/_}"
+if [ -z "${!CC_VAR:-}" ] && ! command -v "$TARBALL_ARCH-linux-musl-gcc" >/dev/null 2>&1; then
+    command -v musl-gcc >/dev/null 2>&1 ||
+        { echo "build: no musl C compiler (install musl-tools / musl-gcc)" >&2; exit 1; }
+    export "$CC_VAR=musl-gcc"
+fi
+"$CARGO" build --release --locked --manifest-path sidecar/Cargo.toml --target "$RUST_TARGET"
+SIDECAR_BIN="sidecar/target/$RUST_TARGET/release/phnx-drive-sync-fuse"
+# must not depend on the host libc: that is the whole point of the musl build
+if ldd "$SIDECAR_BIN" >/dev/null 2>&1; then
+    echo "build: $SIDECAR_BIN is dynamically linked; expected a static binary" >&2
+    exit 1
+fi
+install -m 0755 "$SIDECAR_BIN" "$STAGE/phnx-drive-sync-fuse"
+
 # --- official login CLI (best effort; enables `phnx-drive-sync login`) --
 JS_VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' vendor/client/js/package.json | head -n1)"
 if [ -f vendor/cli/scripts/build-cli.mjs ]; then
@@ -80,7 +113,6 @@ mkdir -p \
     "$STAGE/share/bin" \
     "$STAGE/share/nautilus-scripts/Proton Drive"
 
-cp -a python "$STAGE/"
 cp -a tray "$STAGE/"
 cp -a gui "$STAGE/"
 cp -a assets "$STAGE/"
@@ -110,7 +142,12 @@ if "$BUN" packaging/collect-licenses.mjs "$STAGE/THIRD_PARTY_LICENSES.txt" vendo
 else
     echo "build: WARNING: could not collect embedded dependency licenses" >&2
 fi
-chmod +x "$STAGE/install.sh" "$STAGE/phnx-drive-sync-engine"
+# ... and every crate statically linked into the sidecar
+if ! "$BUN" packaging/collect-crate-licenses.mjs "$CARGO" sidecar/Cargo.toml "$RUST_TARGET" \
+    >>"$STAGE/THIRD_PARTY_LICENSES.txt"; then
+    echo "build: WARNING: could not collect the sidecar's crate licenses" >&2
+fi
+chmod +x "$STAGE/install.sh" "$STAGE/phnx-drive-sync-engine" "$STAGE/phnx-drive-sync-fuse"
 [ -x "$STAGE/proton-drive" ] && chmod +x "$STAGE/proton-drive"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 

@@ -4,14 +4,10 @@ Mounts a real sidecar on a private temp directory, backed by a fixture tree, a
 fixture state.db (same schema as src/state.ts) and a scripted fake engine on the
 RPC socket. Nothing here touches the user's real mount or state.
 
-The implementation under test is chosen by ``PHNX_SIDECAR_CMD`` (a shell-quoted
-command line; the harness appends the standard ``--mount/--tree/--db/--rpc/
---mount-ok`` flags). Unset, it runs ``python3 python/sidecar.py``, so the same
-suite characterizes the Python sidecar today and gates the Rust port later.
-
-For the Python sidecar, pyfuse3/trio are found on ``PHNX_SIDECAR_PYTHONPATH``
-when set, else on the installed app's lib dir (``~/.local/share/phnx-drive-sync/
-python``), else on the system path.
+The binary under test is ``sidecar/target/release/phnx-drive-sync-fuse`` (build
+it with ``cargo build --release``; ``test/sidecar/run.sh`` does). Set
+``PHNX_SIDECAR_CMD`` (a shell-quoted command line) to test another build; the
+harness appends the standard ``--mount/--tree/--db/--rpc/--mount-ok`` flags.
 """
 
 import json
@@ -29,7 +25,7 @@ import time
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-PY_SIDECAR = os.path.join(ROOT, 'python', 'sidecar.py')
+SIDECAR_BIN = os.path.join(ROOT, 'sidecar', 'target', 'release', 'phnx-drive-sync-fuse')
 
 # mirrors openState() in src/state.ts
 SCHEMA = """
@@ -53,21 +49,7 @@ CREATE TABLE IF NOT EXISTS online (
 
 def sidecar_cmd():
     raw = os.environ.get('PHNX_SIDECAR_CMD')
-    if raw:
-        return shlex.split(raw)
-    return [sys.executable, PY_SIDECAR]
-
-
-def _python_path():
-    explicit = os.environ.get('PHNX_SIDECAR_PYTHONPATH')
-    if explicit:
-        return explicit
-    for base in (os.environ.get('XDG_DATA_HOME') or os.path.expanduser('~/.local/share'),):
-        for name in ('phnx-drive-sync', 'drive-sync'):
-            p = os.path.join(base, name, 'python')
-            if os.path.isdir(p):
-                return p
-    return ''
+    return shlex.split(raw) if raw else [SIDECAR_BIN]
 
 
 def sidecar_env(extra=None):
@@ -76,37 +58,8 @@ def sidecar_env(extra=None):
     for k in list(env):
         if k.startswith(('PHNX_DRIVE_SYNC_', 'DRIVE_SYNC_')):
             del env[k]
-    if 'PHNX_SIDECAR_CMD' not in os.environ:
-        pp = _python_path()
-        if pp:
-            env['PYTHONPATH'] = pp + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
     env.update(extra or {})
     return env
-
-
-def is_python_sidecar():
-    return 'PHNX_SIDECAR_CMD' not in os.environ
-
-
-def python_sidecar_bug(why):
-    """Known defect of the Python sidecar the replacement must not inherit.
-
-    Expected to fail against the Python sidecar (so the suite stays green and the
-    defect stays documented); a normal, required test for any other implementation.
-    """
-    def wrap(fn):
-        fn.__doc__ = f'Python sidecar bug: {why}'
-        return unittest.expectedFailure(fn) if is_python_sidecar() else fn
-    return wrap
-
-
-def python_sidecar_flaky(why):
-    """Intermittent defect of the Python sidecar: skipped for it (an expected
-    failure would turn its lucky passes into errors), required for any other."""
-    def wrap(fn):
-        fn.__doc__ = f'Python sidecar flaky bug: {why}'
-        return unittest.skip(f'Python sidecar flaky bug: {why}')(fn) if is_python_sidecar() else fn
-    return wrap
 
 
 def _confined_label():
@@ -130,11 +83,8 @@ def fuse_unavailable_reason():
         # fusermount3's profile cannot inherit a socket created under a snap label
         return (f'running confined ({label}); fusermount3 cannot mount from here - '
                 'use test/sidecar/run.sh')
-    if 'PHNX_SIDECAR_CMD' not in os.environ:
-        probe = subprocess.run([sys.executable, '-c', 'import pyfuse3, trio'], env=sidecar_env(),
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if probe.returncode != 0:
-            return 'pyfuse3/trio are not importable for the Python sidecar'
+    if 'PHNX_SIDECAR_CMD' not in os.environ and not os.access(SIDECAR_BIN, os.X_OK):
+        return f'{SIDECAR_BIN} is not built (cargo build --release in sidecar/)'
     return None
 
 

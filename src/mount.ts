@@ -3,11 +3,10 @@ import { existsSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 import { sidecarPath } from './approot';
-import { localRoot, rpcSocket, shareDir, stateDbPath, stateDir, treeRoot } from './config';
+import { localRoot, rpcSocket, stateDbPath, stateDir, treeRoot } from './config';
 import { log, setStatus, status } from './log';
 
 export const mountOkPath = path.join(stateDir, 'mount-ok');
-const pyLibDir = path.join(shareDir, 'python');
 
 export function isMountPoint(p: string): boolean {
     try {
@@ -52,12 +51,6 @@ let current: Sidecar | null = null;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function sidecarEnv(): NodeJS.ProcessEnv {
-    // preserve any user PYTHONPATH; prepend the engine's sidecar lib dir
-    const existing = process.env.PYTHONPATH;
-    return { ...process.env, PYTHONPATH: existing ? `${pyLibDir}${path.delimiter}${existing}` : pyLibDir };
-}
-
 export async function startMount(): Promise<Sidecar> {
     recoverStaleMount();
     try {
@@ -70,22 +63,20 @@ export async function startMount(): Promise<Sidecar> {
 }
 
 async function mountOnce(): Promise<Sidecar> {
-    const probe = spawnSync('python3', ['-c', 'import pyfuse3'], { env: sidecarEnv(), stdio: 'ignore' });
-    if (probe.status !== 0) {
-        log('ERROR', 'pyfuse3 unavailable for the sidecar; mount degraded (mountpoint stays empty)');
+    if (!existsSync(sidecarPath)) {
+        log('ERROR', `FUSE sidecar missing at ${sidecarPath}; mount degraded (mountpoint stays empty)`);
         return { child: null, ok: false };
     }
     const child = spawn(
-        'python3',
+        sidecarPath,
         [
-            sidecarPath,
             '--mount', localRoot,
             '--tree', treeRoot,
             '--db', stateDbPath,
             '--rpc', rpcSocket,
             '--mount-ok', mountOkPath,
         ],
-        { env: sidecarEnv(), stdio: ['ignore', 'inherit', 'inherit'] },
+        { stdio: ['ignore', 'inherit', 'inherit'] },
     );
     child.on('error', (e) => log('ERROR', 'sidecar failed to spawn', e));
     child.on('exit', (code, sig) => log('WARN', `sidecar exited (code=${code} sig=${sig})`));

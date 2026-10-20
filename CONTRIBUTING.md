@@ -15,8 +15,11 @@ unofficial project and is not affiliated with Proton AG.
 
 ## Development setup
 
-Requirements: [Bun](https://bun.sh) >= 1.4.2. Everything else is installed at
-runtime by the packaged installer.
+Requirements: [Bun](https://bun.sh) >= 1.4.2 and a [Rust](https://rustup.rs)
+toolchain (the FUSE sidecar in `sidecar/`). Release builds also need the musl
+target and a musl C compiler (`rustup target add x86_64-unknown-linux-musl`;
+Debian/Ubuntu: `musl-tools`). Everything else is installed at runtime by the
+packaged installer.
 
 ```sh
 git clone https://github.com/PHNX-Studios/phnx-drive-sync.git
@@ -35,9 +38,11 @@ bun test test/
 xvfb-run -a python3 -m unittest discover -s test/gui
 xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check
 
-# FUSE sidecar characterization suite (real mounts on temp dirs; needs fuse3
-# and pyfuse3/trio). From a snap-confined terminal it re-runs itself in an
-# unconfined systemd --user unit, since fusermount3 cannot mount from there.
+# FUSE sidecar: unit tests, lints, then the characterization suite (builds the
+# release binary and mounts temp dirs; needs fuse3). From a snap-confined
+# terminal the suite re-runs itself in an unconfined systemd --user unit, since
+# fusermount3 cannot mount from there.
+(cd sidecar && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
 test/sidecar/run.sh
 
 # lint the Python GUI, tray and tests
@@ -54,7 +59,8 @@ bash packaging/build.sh
 
 - [ ] `tsc -p tsconfig.json` is clean (strict).
 - [ ] `bun test test/` passes.
-- [ ] `test/sidecar/run.sh` passes if the FUSE sidecar changed.
+- [ ] If the FUSE sidecar changed: `cargo fmt`, `cargo clippy -D warnings` and
+      `cargo test` are clean in `sidecar/`, and `test/sidecar/run.sh` passes.
 - [ ] `ruff check .` is clean (Python GUI, tray and tests).
 - [ ] New behavior has tests where practical (`test/`).
 - [ ] README updated if user-visible behavior changes.

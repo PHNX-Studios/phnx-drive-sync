@@ -15,7 +15,7 @@ ignore = ["E501", "W291", "W293"]
 # before the real imports: gi.require_version() has to precede gi.repository in
 # the GTK modules and the tray, and the tests and the GUI entry insert sys.path
 # first (dev + installed layouts). E402 stays enabled for the rest of the tree,
-# so a misplaced import in plain Python (e.g. python/sidecar.py) is still caught.
+# so a misplaced import elsewhere in the Python tree is still caught.
 "test/**" = ["E402"]
 "gui/phnx-drive-sync-gui.py" = ["E402"]
 "gui/phnxdgui/*.py" = ["E402"]

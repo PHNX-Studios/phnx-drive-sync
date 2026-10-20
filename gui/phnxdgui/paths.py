@@ -76,7 +76,7 @@ def env_file() -> str:
 
 
 def app_root() -> str:
-    """The installed runtime dir (contains python/, assets/, tray/, gui/, VERSION).
+    """The installed runtime dir (contains phnx-drive-sync-fuse, assets/, tray/, gui/, VERSION).
 
     gui/phnxdgui/paths.py -> gui/phnxdgui -> gui -> libdir
     """

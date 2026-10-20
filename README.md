@@ -251,7 +251,7 @@ phnx-drive-sync login        # the only manual step: sign in to Proton Drive
 ### FUSE readiness
 
 Installation ends with a **FUSE readiness report**. Files-on-demand needs the
-system FUSE stack (`/dev/fuse`, the setuid `fusermount3`, `libfuse3`/`pyfuse3`),
+system FUSE stack (`/dev/fuse` and the setuid `fusermount3` from `fuse3`),
 and `fusermount3` cannot be provided without root, so that part is only set up on
 the elevated path. If it is missing, the installer says exactly what to install;
 the engine still performs full bidirectional sync, but `~/Proton Drive` stays
@@ -458,7 +458,7 @@ recoverable there).
 
 ## Files on demand
 
-`~/Proton Drive` is a FUSE mount (pyfuse3 sidecar) over the real tree at
+`~/Proton Drive` is a FUSE mount (the `phnx-drive-sync-fuse` sidecar) over the real tree at
 `~/.local/share/phnx-drive-sync/tree`. Every synced path is always visible with
 its real size; online-only files cost no disk (`du` ~ 0, `blocks=0`). Reads never
 see zero-fill: reading a placeholder blocks, downloads the content from the
@@ -534,12 +534,13 @@ banner; a desktop notification is sent once per offline/online transition.
 
 ### Sidecar requirements
 
-`python3`, `fusermount3`/`libfuse3`, and `pyfuse3`, `trio`, `cffi` importable
-with `PYTHONPATH=~/.local/share/phnx-drive-sync/python`. `./install.sh` installs
-these for you (distro packages where available, falling back to
-`pip install --target ~/.local/share/phnx-drive-sync/python`). The engine probes
-the import at startup; if it fails the engine still runs - the mount point stays
-empty and the tray shows "Mount degraded".
+The sidecar is a static binary (`~/.local/lib/phnx-drive-sync/phnx-drive-sync-fuse`,
+written in Rust, no libc or Python dependency) shipped in the release tarball; it
+only needs `/dev/fuse` and the setuid `fusermount3` from the system `fuse3`
+package. If the binary is missing or cannot mount, the engine still runs - the
+mount point stays empty and the tray shows "Mount degraded". Upgrading from 0.5
+or earlier removes the pip-installed `pyfuse3`/`trio`/`cffi` that the former
+Python sidecar used (`~/.local/share/phnx-drive-sync/python/`).
 
 ## Filters
 
@@ -569,14 +570,13 @@ disappear from Proton Drive.
 | online-only markers (`online` table) | same db (dropped with their baseline row) |
 | keep-on-this-device marks (`pinned` table) | same db (survive recall; dropped with their baseline row) |
 | SDK node/crypto cache | `~/.local/share/phnx-drive-sync/proton-cache/` |
-| sidecar python libs (pyfuse3/trio/cffi) | `~/.local/share/phnx-drive-sync/python/` |
 | log + `status.json` | `~/.local/state/phnx-drive-sync/` |
 | daemon pid lock | `~/.local/state/phnx-drive-sync/daemon.lock` (stale-aware) |
 | pin/unpin rpc socket | `~/.local/state/phnx-drive-sync/rpc.sock` (unlinked at boot/shutdown) |
 | sidecar heartbeat (tray mount check) | `~/.local/state/phnx-drive-sync/mount-ok` |
 | tray icon + icons | `~/.local/lib/phnx-drive-sync/tray/` (launcher: `~/.local/bin/phnx-drive-sync-tray`; autostart: `~/.config/autostart/phnx-drive-sync-tray.desktop`) |
 | file manager GUI | `~/.local/lib/phnx-drive-sync/gui/` (launcher: `~/.local/bin/phnx-drive-sync-gui`; app entry: `~/.local/share/applications/phnx-drive-sync-gui.desktop`) |
-| installed runtime (internal disk) | `~/.local/lib/phnx-drive-sync/` (compiled engine + bundled login CLI + sidecar/tray/gui; installed from the release tarball) |
+| installed runtime (internal disk) | `~/.local/lib/phnx-drive-sync/` (compiled engine + FUSE sidecar binary + bundled login CLI + tray/gui; installed from the release tarball) |
 
 ### status.json
 
@@ -616,7 +616,7 @@ names the item in flight (`null` when idle); the tray shows it with an
 | `PHNX_DRIVE_SYNC_RPC_CONNECT_TIMEOUT_S` | `10` | Sidecar: how long a recall may wait for the engine's RPC socket before failing `ENOTCONN`. |
 | `PHNX_DRIVE_SYNC_RPC_RESPONSE_TIMEOUT_S` | `1800` | Sidecar: how long a recall may wait for the engine's answer (large-file headroom). |
 | `PHNX_DRIVE_SYNC_RELEASE_URL` | GitHub releases | Release host/mirror for `update`. |
-| `PHNX_DRIVE_SYNC_LIBDIR` | auto | Internal: where shipped resources (`python/`, `assets/`, `tray/`, `gui/`) are found. |
+| `PHNX_DRIVE_SYNC_LIBDIR` | auto | Internal: where shipped resources (`phnx-drive-sync-fuse`, `assets/`, `tray/`, `gui/`) are found. |
 
 Beyond these, the systemd unit's env file (`~/.config/phnx-drive-sync/env`)
 carries the SDK's `PROTON_DRIVE_CACHE_DIR` and `PROTON_DRIVE_LOG_LEVEL`. Every
@@ -701,7 +701,8 @@ bun run deps                        # install vendored dependency trees (cli + S
 ./node_modules/.bin/tsc -p tsconfig.json   # type-check: strict, noEmit
 bun test test/                      # classify/placeholder/evict/offline/connectivity unit tests (temp state)
 ./phnx-drive-sync.sh once --dry-run    # classify without changing anything
-python3 test/test_sidecar_offline.py   # sidecar offline errno + RPC contract (stubs pyfuse3/trio)
+test/sidecar/run.sh                 # build the FUSE sidecar and run its characterization suite (real mounts)
+(cd sidecar && cargo test)          # sidecar unit tests
 xvfb-run -a python3 -m unittest discover -s test/gui  # GUI unit tests (widget tests need a display)
 xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check  # headless GUI smoke
 ruff check .                        # lint the Python GUI, tray and tests
@@ -710,7 +711,9 @@ bash packaging/build.sh             # build the portable release tarball into di
 ```
 
 `packaging/build.sh` compiles `src/index.ts` and the login CLI into self-contained
-binaries (Bun runtime + all modules embedded, glibc 2.17+), assembles the runtime
+binaries (Bun runtime + all modules embedded, glibc 2.17+) and the FUSE sidecar
+into a static musl binary (needs a Rust toolchain and a musl C compiler, e.g.
+`musl-tools`), assembles the runtime
 resources, and emits `dist/phnx-drive-sync-<version>-linux-<arch>.tar.gz`, a
 per-architecture manifest fragment `dist/latest-<arch>.json`, and a legacy
 single-arch `dist/latest.json`. The release workflow merges the fragments into the

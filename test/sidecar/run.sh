@@ -6,16 +6,21 @@
 # the same reason the engine spawns the sidecar under systemd.
 #
 # Usage:  test/sidecar/run.sh [unittest args...]
-#   PHNX_SIDECAR_CMD="path/to/binary"  test/sidecar/run.sh   # test another implementation
+#   PHNX_SIDECAR_CMD="path/to/binary"  test/sidecar/run.sh   # test another build
 set -euo pipefail
 
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd -- "$HERE/../.." && pwd)"
 
+# the default binary under test: (re)build it so the suite never runs a stale one
+if [ -z "${PHNX_SIDECAR_CMD:-}" ] && [ -z "${PHNX_SIDECAR_UNCONFINED:-}" ]; then
+    cargo build --release --quiet --manifest-path "$ROOT/sidecar/Cargo.toml"
+fi
+
 label="$(tr -d '\0' </proc/self/attr/current 2>/dev/null || true)"
 if [[ "$label" == snap.* ]] && [ -z "${PHNX_SIDECAR_UNCONFINED:-}" ]; then
     props=(--setenv=PHNX_SIDECAR_UNCONFINED=1 --setenv=HOME="$HOME")
-    for var in PHNX_SIDECAR_CMD PHNX_SIDECAR_PYTHONPATH PHNX_SIDECAR_SHOW_LOG XDG_DATA_HOME; do
+    for var in PHNX_SIDECAR_CMD PHNX_SIDECAR_SHOW_LOG; do
         [ -n "${!var:-}" ] && props+=(--setenv="$var=${!var}")
     done
     exec systemd-run --user --pipe --wait --quiet --same-dir "${props[@]}" \

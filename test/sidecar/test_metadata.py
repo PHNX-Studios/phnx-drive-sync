@@ -10,7 +10,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from harness import SidecarTestCase, python_sidecar_bug, python_sidecar_flaky
+from harness import SidecarTestCase
 
 MTIME_MS = 1_700_000_000_123
 
@@ -106,7 +106,6 @@ class ZeroCacheTimeouts(SidecarTestCase):
         st = os.stat(self.fx.mnt('flip.txt'))
         self.assertEqual((st.st_size, st.st_blocks), (1234, 0))
 
-    @python_sidecar_flaky('fs_attrs checks tree then baseline once; a hydrate between the two reads as ENOENT')
     def test_stat_never_misses_a_file_mid_hydrate_or_evict(self):
         # the engine's orders: hydrate puts the bytes in, then clears the marker;
         # evict sets the marker, then unlinks. Either way the file always exists
@@ -239,10 +238,8 @@ class OddNames(SidecarTestCase):
         self.assertIn('ремоут.txt', names)
         self.assertEqual(os.stat(self.fx.mnt('ремоут.txt')).st_size, 3)
 
-    # ino_for() hashes rel.encode(), which raises on surrogate-escaped names; the
-    # exception escapes the session loop and the whole sidecar exits (rc=1). The
-    # replacement must hash the raw name bytes (identical for valid UTF-8 names).
-    @python_sidecar_bug('a non-UTF-8 name in a listed directory crashes the sidecar')
+    # inode numbers hash the raw name bytes (the Python sidecar hashed str.encode(),
+    # which raised on such a name and took the whole mount down)
     def test_non_utf8_tree_name_is_listed_and_readable(self):
         raw = os.fsencode(self.fx.tree) + b'/caf\xe9.txt'
         with open(raw, 'wb') as f:
