@@ -12,4 +12,4 @@ __all__ = ["__version__"]
 
 # Kept in sync with the release VERSION file the installer deploys; the app
 # prefers the installed file at runtime and falls back to this constant.
-__version__ = "0.6.0"
+__version__ = "0.6.1"
