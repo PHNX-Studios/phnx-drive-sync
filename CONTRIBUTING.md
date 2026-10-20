@@ -35,6 +35,11 @@ bun test test/
 xvfb-run -a python3 -m unittest discover -s test/gui
 xvfb-run -a python3 gui/phnx-drive-sync-gui.py --self-check
 
+# FUSE sidecar characterization suite (real mounts on temp dirs; needs fuse3
+# and pyfuse3/trio). From a snap-confined terminal it re-runs itself in an
+# unconfined systemd --user unit, since fusermount3 cannot mount from there.
+test/sidecar/run.sh
+
 # lint the Python GUI, tray and tests
 ruff check .
 
@@ -49,6 +54,7 @@ bash packaging/build.sh
 
 - [ ] `tsc -p tsconfig.json` is clean (strict).
 - [ ] `bun test test/` passes.
+- [ ] `test/sidecar/run.sh` passes if the FUSE sidecar changed.
 - [ ] `ruff check .` is clean (Python GUI, tray and tests).
 - [ ] New behavior has tests where practical (`test/`).
 - [ ] README updated if user-visible behavior changes.
