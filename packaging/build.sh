@@ -88,8 +88,10 @@ if [ -z "${!CC_VAR:-}" ] && ! command -v "$TARBALL_ARCH-linux-musl-gcc" >/dev/nu
 fi
 "$CARGO" build --release --locked --manifest-path sidecar/Cargo.toml --target "$RUST_TARGET"
 SIDECAR_BIN="sidecar/target/$RUST_TARGET/release/phnx-drive-sync-fuse"
-# must not depend on the host libc: that is the whole point of the musl build
-if ldd "$SIDECAR_BIN" >/dev/null 2>&1; then
+# must not depend on the host libc: that is the whole point of the musl build.
+# (ldd is no judge: it exits 0 on the static-PIE binaries the musl target makes.)
+if readelf -lW "$SIDECAR_BIN" | grep -q 'Requesting program interpreter' ||
+    readelf -dW "$SIDECAR_BIN" | grep -q '(NEEDED)'; then
     echo "build: $SIDECAR_BIN is dynamically linked; expected a static binary" >&2
     exit 1
 fi

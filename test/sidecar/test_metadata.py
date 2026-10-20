@@ -109,15 +109,19 @@ class ZeroCacheTimeouts(SidecarTestCase):
     def test_stat_never_misses_a_file_mid_hydrate_or_evict(self):
         # the engine's orders: hydrate puts the bytes in, then clears the marker;
         # evict sets the marker, then unlinks. Either way the file always exists
-        # on one side or the other, so a stat must never see ENOENT.
+        # on one side or the other, so a stat must never see ENOENT. Each state is
+        # held ~0.2ms: thousands of transitions, far denser than any real
+        # hydrate/evict cadence, yet at most one inside a single attr lookup.
         stop = threading.Event()
         misses = []
 
         def churn():
             while not stop.is_set():
                 self.fx.materialize('flip.txt', b'12345')
+                time.sleep(0.0002)
                 self.fx.add_placeholder('flip.txt', 1234, MTIME_MS)
                 os.unlink(self.fx.tree_path('flip.txt'))
+                time.sleep(0.0002)
 
         def stat_loop():
             while not stop.is_set():
@@ -126,7 +130,7 @@ class ZeroCacheTimeouts(SidecarTestCase):
                 except FileNotFoundError:
                     misses.append(1)
         threads = [threading.Thread(target=churn, daemon=True)] + \
-            [threading.Thread(target=stat_loop, daemon=True) for _ in range(4)]
+            [threading.Thread(target=stat_loop, daemon=True) for _ in range(8)]
         for t in threads:
             t.start()
         time.sleep(4.0)

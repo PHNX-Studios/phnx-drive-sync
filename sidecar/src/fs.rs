@@ -36,6 +36,8 @@ use crate::rpc::Rpc;
 const TTL: Duration = Duration::ZERO;
 const GEN: Generation = Generation(0);
 const BLKSIZE: u32 = 4096;
+/// Tree/baseline check rounds before an entry is reported missing (see fs_attrs).
+const ATTR_ROUNDS: usize = 3;
 
 type Res<T> = Result<T, Errno>;
 
@@ -230,15 +232,19 @@ impl Shared {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => Some(Err(errno_of(e))),
         };
-        if let Some(r) = tree_attr(std::fs::symlink_metadata(&path)) {
-            return r;
+        // The engine moves a hydrate's bytes in before clearing the marker, and
+        // evict marks before unlinking, so the file is always on one side or the
+        // other. A transition landing between the two checks reads as missing on
+        // both, so look again before reporting a spurious ENOENT; a few rounds
+        // also cover back-to-back flips.
+        for _ in 0..ATTR_ROUNDS {
+            if let Some(r) = tree_attr(std::fs::symlink_metadata(&path)) {
+                return r;
+            }
+            if let Some(p) = baseline::placeholder_of(rel) {
+                return Ok(self.placeholder_attr(rel, p));
+            }
         }
-        if let Some(p) = baseline::placeholder_of(rel) {
-            return Ok(self.placeholder_attr(rel, p));
-        }
-        // A hydrate that finished between the two checks: the engine moves the
-        // bytes in before clearing the marker (and evict marks before unlinking),
-        // so one more look at the tree closes the window instead of a spurious ENOENT.
         tree_attr(std::fs::symlink_metadata(&path)).unwrap_or(Err(Errno::ENOENT))
     }
 
