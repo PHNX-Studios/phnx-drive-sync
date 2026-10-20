@@ -80,9 +80,11 @@ What it provides:
 
 ## Requirements
 
-- [bun](https://bun.sh) to build and run from a source checkout. The release
-  tarball is self-contained (a compiled engine plus the bundled login CLI), so
-  an installed copy needs no external runtime.
+- [bun](https://bun.sh) and a [Rust](https://rustup.rs) toolchain to build and
+  run from a source checkout (Rust builds the FUSE sidecar; without it the engine
+  still syncs but the mount stays empty). The release tarball is self-contained
+  (a compiled engine, the FUSE sidecar binary and the bundled login CLI), so an
+  installed copy needs no external runtime.
 - An authenticated Proton Drive session. Sign in with `phnx-drive-sync login`
   (see [Authentication and sessions](#authentication-and-sessions)); the session
   is shared with the official CLI through the GNOME keyring.
@@ -217,8 +219,9 @@ Download the release tarball for your architecture from the
 [releases page](https://github.com/PHNX-Studios/phnx-drive-sync/releases), then
 run its installer. It is self-contained: the engine and the official login CLI
 are compiled to single binaries (Bun runtime + all dependencies embedded, glibc
-2.17+), and the installer wires up systemd user units, autostart, icons and the
-Nautilus context menu.
+2.17+), the FUSE sidecar is a static binary with no libc dependency, and the
+installer wires up systemd user units, autostart, icons and the Nautilus context
+menu.
 
 Everything lands under `~/.local`; the only elevated step is installing a small
 set of host packages (fuse3, python3, GTK/AppIndicator, inotify-tools, gvfs,
@@ -463,7 +466,9 @@ recoverable there).
 its real size; online-only files cost no disk (`du` ~ 0, `blocks=0`). Reads never
 see zero-fill: reading a placeholder blocks, downloads the content from the
 baseline (byte-identical) and materializes the file - OneDrive recall semantics.
-Writes to a placeholder materialize first, then write.
+Writes to a placeholder materialize first, then write. Durability is that of a
+local filesystem: closing a file does not force it to disk, while `fsync` /
+`fdatasync` through the mount do (the sync engine picks the change up either way).
 
 ### Placeholders and recall
 

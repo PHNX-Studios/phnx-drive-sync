@@ -48,7 +48,8 @@ the SDK's integration rules:
 
 ## Bun runtime
 
-The single-file binaries produced by `packaging/build.sh` embed the Bun runtime.
+The engine and login CLI binaries produced by `packaging/build.sh` embed the Bun
+runtime (the FUSE sidecar does not; see below).
 
 - License: MIT
 - Copyright: Copyright (c) Bun contributors
@@ -56,8 +57,8 @@ The single-file binaries produced by `packaging/build.sh` embed the Bun runtime.
 
 ## Embedded JavaScript dependencies
 
-The compiled binaries embed the npm dependencies of `vendor/cli` (and the
-vendored SDK), including but not limited to `@boltffi/runtime`, `@noble/hashes`,
+The engine and login CLI binaries embed the npm dependencies of `vendor/cli`
+(and the vendored SDK), including but not limited to `@boltffi/runtime`, `@noble/hashes`,
 `comlink`, `ttag`, and their transitive dependencies. Each package retains its
 own license.
 
@@ -67,13 +68,15 @@ package in the vendored dependency tree is generated at build time into
 release tarball (and installed alongside this file). That generated file is the
 authoritative list for a given release.
 
+## FUSE sidecar Rust crates
+
 The FUSE sidecar (`phnx-drive-sync-fuse`) is a statically linked Rust binary.
 It embeds its crate dependencies, notably `fuser` (MIT), `rusqlite` and
 `libsqlite3-sys` (MIT; the bundled SQLite amalgamation is in the public domain),
-`serde_json`, `sha1`, `libc`, `log` and `signal-hook` (MIT OR Apache-2.0)
-and `lexopt` (MIT), and their transitive dependencies. The
-release build appends every crate's declared license and license texts to
-`THIRD_PARTY_LICENSES.txt` (`packaging/collect-crate-licenses.mjs`).
+`serde_json`, `sha1`, `libc`, `log` and `signal-hook` (MIT OR Apache-2.0) and
+`lexopt` (MIT), and their transitive dependencies. The release build appends
+every crate's declared license and license texts to `THIRD_PARTY_LICENSES.txt`
+(`packaging/collect-crate-licenses.mjs`).
 
 ## GUI and tray runtime dependencies (not redistributed)
 
