@@ -9,6 +9,9 @@ Type=simple
 # self-contained compiled binary (installed by packaging/install.sh); no bun,
 # sources or node_modules are needed at runtime
 ExecStart=%h/.local/lib/phnx-drive-sync/phnx-drive-sync-engine run
+# `systemctl --user reload`: SIGHUP makes an engine that is waiting for a sign-in
+# retry its connection now (no restart needed after `phnx-drive-sync login`)
+ExecReload=kill -HUP $MAINPID
 # optional per-user overrides (PHNX_DRIVE_SYNC_*, PROTON_DRIVE_*); created by install.sh
 EnvironmentFile=-%h/.config/phnx-drive-sync/env
 # find user-installed helpers (e.g. a user-local inotifywait in ~/.local/bin,

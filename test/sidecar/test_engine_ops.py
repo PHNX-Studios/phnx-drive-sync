@@ -16,6 +16,8 @@ from harness import SidecarTestCase, wait_for
 MTIME_MS = 1_700_000_000_000
 OFFLINE = {'ok': False, 'code': 'offline', 'error': 'offline: needs internet', 'offline': True}
 AUTH = {'ok': False, 'code': 'auth', 'error': '401 Unauthorized'}
+UNAVAILABLE = {'ok': False, 'code': 'unavailable', 'error': 'engine is still connecting'}
+TIMEOUT = {'ok': False, 'code': 'timeout', 'error': 'download stalled'}
 FAIL = {'ok': False, 'error': 'missing baseline facts'}
 
 
@@ -166,6 +168,23 @@ class EngineUnreachable(SidecarTestCase):
             raise OSError('drop the connection without a reply')
         self.fx.engine.handler = handler
         self.assertErrno(errno.ENOTCONN, open, self.fx.mnt('doc.txt'), 'rb')
+
+
+class EngineNotReady(SidecarTestCase):
+    def setUpFixture(self):
+        self.fx.add_placeholder('doc.txt', 11, MTIME_MS)
+
+    def test_unavailable_is_enotconn(self):
+        self.fx.engine.handler = lambda req: UNAVAILABLE
+        started = time.monotonic()
+        self.assertErrno(errno.ENOTCONN, open, self.fx.mnt('doc.txt'), 'rb')
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_timeout_is_etimedout(self):
+        self.fx.engine.handler = lambda req: TIMEOUT
+        started = time.monotonic()
+        self.assertErrno(errno.ETIMEDOUT, open, self.fx.mnt('doc.txt'), 'rb')
+        self.assertLess(time.monotonic() - started, 2.0)
 
 
 class LegacyTimeoutEnv(SidecarTestCase):

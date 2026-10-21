@@ -6,7 +6,7 @@ import * as st from '../src/state';
 import { resetState, seedRow } from './helpers';
 
 function stats(): PassStats {
-    return { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, adopts: 0, errors: 0, lastError: null, authFailed: false };
+    return { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, adopts: 0, errors: 0, lastError: null, authFailed: false, scanAuthFailed: false };
 }
 
 function run(

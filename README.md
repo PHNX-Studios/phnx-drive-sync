@@ -154,10 +154,17 @@ interchangeable for the purposes of this app.
 The SDK renews the short-lived access token automatically from the refresh token
 on every authenticated request, so an ordinary token expiry never interrupts
 syncing. The engine classifies a response as an authentication failure only when
-it matches a small set of signals (`401`/`403`, `unauthorized`, `forbidden`,
-`session`, `refresh token`, two-factor, `authentication required`). A transient
-failure (a network blip, a temporary 2FA prompt) therefore recovers on its own
-once the SDK can refresh again.
+it matches a small set of signals: an HTTP status of `401`/`403` on the error (or
+anywhere in its cause chain), or wording such as `unauthorized`, `forbidden`,
+`invalid access token`, `session`, `refresh token`, `not logged in`, two-factor,
+`authentication required`. A keyring or `pass` store that is merely locked or
+missing ("Failed to load session from secrets", "Failed to load session in pass")
+is not a rejected session: it is logged as an error and retried with the same
+backoff, without marking the engine offline. Likewise, a `401` after which the
+stored session is still present (the SDK only removes it when a token refresh is
+refused with a 4xx other than 429) is a transient refresh failure and is retried,
+not reported as "sign in". A transient failure (a network blip, a temporary 2FA
+prompt) therefore recovers on its own once the SDK can refresh again.
 
 ### Session states
 
@@ -179,38 +186,48 @@ The auth-relevant behavior differs by when the failure happens:
   the engine keeps running. It retries on the next change (a watcher event, a
   remote event, or the safety poll), so a temporary failure heals itself. The
   tray icon turns red and the GUI shows "auth required" while in this state.
-- **Startup (no session, or it is already invalid).** The engine cannot resolve
-  the remote root without a valid session, so it fails during startup or the
-  initial full pass and exits. The systemd unit restarts it every 10 s
-  (`Restart=on-failure`), which surfaces as a red "service failed" tray state
-  rather than `auth-required`. The fix is to sign in; the unit then comes up on
-  its own.
-- **`once` mode.** Exit code `3` means the pass hit an authentication failure
-  (`0` ok, `2` other errors). A missing or invalid session at startup fails
-  earlier and exits `1` instead.
+- **Startup (no session, or it is already invalid).** The engine mounts and
+  opens its RPC socket first, then connects. If the session is rejected it sets
+  `state: auth-required` with the message in `lastError` and **stays running**:
+  there is no systemd restart loop and no timed retry. The tray icon turns red
+  ("Sign in required - run: phnx-drive-sync login"), local files stay usable, and
+  opening an online-only file fails at once with `EACCES` instead of hanging. The
+  engine retries when you run `phnx-drive-sync login`, `systemctl --user reload
+  phnx-drive-sync.service` (SIGHUP) or *Sync now*, and, as a quiet safety net for
+  a keyring that unlocks late, every `PHNX_DRIVE_SYNC_AUTH_RECHECK_MS` (default
+  15 min, `0` disables). Network failures at startup still back off as described
+  under [Offline behavior](#offline-behavior). The same applies when the session
+  dies during the initial full pass.
+- **`once` mode.** Exit code `3` means authentication failed, at startup or in
+  the pass; `2` means other errors, including being offline at startup; `1` is an
+  unexpected startup failure (for example a locked keyring); `0` is ok.
 
 ### Recovering from an expired session
 
 To recover after a rejection:
 
 1. Sign in again: `phnx-drive-sync login` (or `proton-drive auth login`). This
-   writes a fresh session to the keyring.
-2. Restart the engine so it re-reads the keyring:
-   `phnx-drive-sync restart` (or
-   `systemctl --user restart phnx-drive-sync.service`).
+   writes a fresh session to the keyring. A failed token refresh signs out and
+   removes the stored session, so a login is needed afterwards.
+2. If the engine is waiting for a sign-in (`state: auth-required` from startup),
+   that is all: `phnx-drive-sync login` tells the engine, which reconnects at
+   once (`systemctl --user reload phnx-drive-sync.service` does the same after
+   `proton-drive auth login`).
+3. If the session expired while the engine was running, restart it so it
+   re-reads the keyring: `phnx-drive-sync restart` (or
+   `systemctl --user restart phnx-drive-sync.service`). `login` prints this hint.
 
-The running engine loads the session once at startup; it does not re-read the
-keyring on a later pass, so a restart is the reliable way to pick up a new
-session after a full re-login. (A transient failure that only needs a token
-refresh recovers without any action, because the SDK refreshes in place.)
+A running engine loads the session once per connection; it does not re-read the
+keyring on a later pass. (A transient failure that only needs a token refresh
+recovers without any action, because the SDK refreshes in place.)
 
 ### Logging out
 
 `proton-drive auth logout` removes the keyring entry (and the CLI's local
 caches). A running engine loads the session only at startup, so it is not
 notified of the change and keeps using its in-memory session; it notices only on
-its next restart, when it finds no session and fails to initialize (exiting until
-you sign in again). To sign out completely, run `proton-drive auth logout` and
+its next restart, when it finds no session and waits in `auth-required` until you
+sign in again. To sign out completely, run `proton-drive auth logout` and
 restart the engine, for example with `phnx-drive-sync restart`.
 
 ## Install
@@ -485,6 +502,16 @@ local filesystem: closing a file does not force it to disk, while `fsync` /
   largest first; unsynced edits and keep-marked files stay local. The same action
   is available from the tray menu and the GUI.
 - Renames/moves of placeholders are metadata-only (remote move included).
+- Opening an online-only file fails fast instead of hanging when the engine
+  cannot serve it: `ENOTCONN` while it has not connected yet (or the initial pass
+  is still running past `PHNX_DRIVE_SYNC_HYDRATE_WAIT_MS`), `EACCES` while it
+  waits for a sign-in, `ETIMEDOUT` when a download makes no progress for
+  `PHNX_DRIVE_SYNC_HYDRATE_STALL_MS`, and `ENETDOWN` offline (including offline
+  at boot). A recall download in flight is cancelled when the network drops, the
+  engine stops, or the session is lost during startup or the initial pass (a
+  session that expires later fails on the next request instead); `pin` downloads
+  are only bounded by the stall timeout. The online-only marker is kept, so the
+  next open retries.
 - Nautilus/gio trash: a placeholder is trashed remotely; a materialized file
   moves into the local `.Trash-<uid>` (never synced) and is trashed remotely on
   the next pass.
@@ -522,7 +549,10 @@ then retries the API with backoff instead of crash-looping).
 While the engine believes it is offline, opening an online-only file fails
 **immediately** with `ENETDOWN` ("Network is down") instead of hanging through the
 SDK's retries and returning `EIO` ("Input/output error"). The same fast failure
-applies to renaming/trashing a placeholder, and `pin` reports a single
+applies to renaming/trashing a placeholder (a download stalled for
+`PHNX_DRIVE_SYNC_HYDRATE_STALL_MS` ends with `ETIMEDOUT` instead; an engine that
+boots offline also answers `ENETDOWN`, while `ENOTCONN` means it is online but has
+not connected yet), and `pin` reports a single
 `you're offline - N file(s) need internet to download.` Any state stays safe: the
 online-only marker is kept on failure (I5), no `.part` temp is left behind, and a
 retry after reconnect downloads normally. When connectivity returns, the engine
@@ -617,6 +647,9 @@ names the item in flight (`null` when idle); the tray shows it with an
 | `PHNX_DRIVE_SYNC_CONNECTIVITY_POLL_MS` | `5000` | Kernel link-probe interval for proactive offline detection; `0` disables the probe (reactive fast-fail still applies). |
 | `PHNX_DRIVE_SYNC_RECONNECT_MIN_MS` | `5000` | First API-reconnect delay after an offline boot; doubles up to the max. |
 | `PHNX_DRIVE_SYNC_RECONNECT_MAX_MS` | `120000` | Ceiling for the API-reconnect backoff. |
+| `PHNX_DRIVE_SYNC_HYDRATE_STALL_MS` | `60000` | A download with no data for this long is aborted (`ETIMEDOUT`); `0` disables. |
+| `PHNX_DRIVE_SYNC_HYDRATE_WAIT_MS` | `120000` | How long an online-only open waits for the initial pass before failing `ENOTCONN`. |
+| `PHNX_DRIVE_SYNC_AUTH_RECHECK_MS` | `900000` | While waiting for a sign-in, quietly retry this often (a late-unlocking keyring); `0` = only on login / reload / Sync now. |
 | `PHNX_DRIVE_SYNC_OFFLINE_NOTIFY_COOLDOWN_MS` | `1800000` | Minimum gap between offline transition notifications (30 min). |
 | `PHNX_DRIVE_SYNC_RPC_CONNECT_TIMEOUT_S` | `10` | Sidecar: how long a recall may wait for the engine's RPC socket before failing `ENOTCONN`. |
 | `PHNX_DRIVE_SYNC_RPC_RESPONSE_TIMEOUT_S` | `1800` | Sidecar: how long a recall may wait for the engine's answer (large-file headroom). |
@@ -686,8 +719,9 @@ covered without a restart.
 ### Auth failures
 
 Auth failures surface in `status.json` as `auth-required` and in the tray icon,
-and recover either automatically (a token refresh) or after a re-login plus a
-restart. The full behavior, the session states and the recovery steps are in
+and recover either automatically (a token refresh), on `phnx-drive-sync login`
+(an engine waiting for a sign-in reconnects at once), or after a restart when the
+session expired while the engine was running. The full behavior, the session states and the recovery steps are in
 [Authentication and sessions](#authentication-and-sessions).
 
 ### Offline

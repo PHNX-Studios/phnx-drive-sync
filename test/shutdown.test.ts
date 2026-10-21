@@ -7,7 +7,7 @@ import { waitForPassEnd } from '../src/shutdown';
 import { execute, requestStop, type Action, type PassStats } from '../src/sync';
 
 function stats(): PassStats {
-    return { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, adopts: 0, errors: 0, lastError: null, authFailed: false };
+    return { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, adopts: 0, errors: 0, lastError: null, authFailed: false, scanAuthFailed: false };
 }
 
 describe('waitForPassEnd', () => {

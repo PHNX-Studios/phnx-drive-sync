@@ -5,7 +5,7 @@ import path from 'node:path';
 import { localRoot, rpcSocket, treeRoot } from './config';
 import { isOffline } from './connectivity';
 import { log } from './log';
-import { isAuthError, isOfflineError } from './remote';
+import { HydrateTimeoutError, isAuthError, isOfflineError, RemoteUnavailableError } from './remote';
 import * as st from './state';
 
 export interface PinResult {
@@ -34,7 +34,7 @@ export interface ListEntry {
 }
 
 export interface RpcRequest {
-    op: 'pin' | 'unpin' | 'hydrate' | 'mv' | 'trash' | 'evict' | 'prefetch' | 'list' | 'sync';
+    op: 'pin' | 'unpin' | 'hydrate' | 'mv' | 'trash' | 'evict' | 'prefetch' | 'list' | 'sync' | 'reload';
     paths: string[];
 }
 
@@ -43,9 +43,11 @@ export interface RpcResponse {
     /**
      * Machine-readable failure class. `offline` lets the sidecar map the failure
      * to `ENETDOWN` (and the CLI/GUI render "you're offline") instead of a
-     * generic `EIO`; `auth` distinguishes a session problem from connectivity.
+     * generic `EIO`; `auth` distinguishes a session problem from connectivity;
+     * `unavailable` (engine not connected yet) maps to `ENOTCONN` and `timeout`
+     * (a stalled download) to `ETIMEDOUT`.
      */
-    code?: 'offline' | 'auth' | 'not-found' | 'malformed';
+    code?: 'offline' | 'auth' | 'unavailable' | 'timeout' | 'not-found' | 'malformed';
     error?: string;
     /** Engine connectivity at response time (always present; drives sidecar prefetch gating). */
     offline?: boolean;
@@ -67,6 +69,8 @@ export interface RpcHandlers {
     list: (paths: string[]) => Promise<ListEntry[]>;
     /** Trigger an incremental pass (the GUI "Sync now"); no paths. */
     sync: (paths: string[]) => Promise<PinResult[]>;
+    /** Re-read the credential store and reconnect (sent by `login`); no paths. */
+    reload: (paths: string[]) => Promise<PinResult[]>;
 }
 
 /** null = any non-empty path list; number = exact arity (mv = [from, to]; sync = none). */
@@ -80,12 +84,13 @@ const OP_ARITY: Record<RpcRequest['op'], number | null> = {
     prefetch: 1,
     list: 1,
     sync: 0,
+    reload: 0,
 };
 
 /**
  * Per-op path validation.
  *
- * - `sync` takes no paths at all.
+ * - `sync` and `reload` take no paths at all.
  * - `list` takes exactly one directory path and allows '' (the sync root).
  * - everything else takes one or more non-empty, traversal-free relative paths.
  */
@@ -161,6 +166,8 @@ export function stopRpcServer(): void {
 export function errorCode(e: unknown): RpcResponse['code'] {
     if (isOfflineError(e)) return 'offline';
     if (isAuthError(e)) return 'auth';
+    if (e instanceof RemoteUnavailableError) return 'unavailable';
+    if (e instanceof HydrateTimeoutError) return 'timeout';
     return undefined;
 }
 
@@ -208,7 +215,7 @@ function toRel(raw: string): string {
     return rel;
 }
 
-function call(req: RpcRequest, timeoutMs: number): Promise<RpcResponse> {
+function call(req: RpcRequest, timeoutMs: number, quiet = false): Promise<RpcResponse> {
     return new Promise((resolve, reject) => {
         const sock = createConnection(rpcSocket);
         let buf = '';
@@ -223,7 +230,7 @@ function call(req: RpcRequest, timeoutMs: number): Promise<RpcResponse> {
         const timer = setTimeout(() => fail(new Error('timed out waiting for the engine')), timeoutMs);
         sock.setEncoding('utf8');
         sock.on('connect', () => {
-            console.error('engine acknowledged; waiting for it to finish...');
+            if (!quiet) console.error('engine acknowledged; waiting for it to finish...');
             sock.write(JSON.stringify(req) + '\n');
         });
         sock.on('data', (chunk: string) => {
@@ -246,6 +253,22 @@ function call(req: RpcRequest, timeoutMs: number): Promise<RpcResponse> {
         });
         sock.on('close', () => fail(new Error('engine closed the connection unexpectedly')));
     });
+}
+
+/**
+ * Client side of `reload` (used by `login`): ask the running engine to re-read the
+ * stored session. `reconnecting` = it was waiting for a session and is retrying now;
+ * `restart-required` = it already holds a live session (the new one only takes
+ * effect on restart); `unreachable` = no engine answered.
+ */
+export async function requestReload(timeoutMs = 5000): Promise<'reconnecting' | 'restart-required' | 'unreachable'> {
+    try {
+        const resp = await call({ op: 'reload', paths: [] }, timeoutMs, true);
+        if (!resp.ok) return 'unreachable';
+        return resp.results?.[0]?.note === 'reconnecting' ? 'reconnecting' : 'restart-required';
+    } catch {
+        return 'unreachable';
+    }
 }
 
 /** Client side: returns the process exit code. No lock, no remote connection. */

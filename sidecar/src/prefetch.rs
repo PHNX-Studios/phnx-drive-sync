@@ -75,7 +75,8 @@ impl Prefetch {
     fn job(self: Arc<Self>, rel: String) {
         match self.rpc.call("hydrate", &[&rel]) {
             Ok(_) => log::info!("prefetch: {rel} materialized"),
-            Err(RpcError::Offline(_)) => {} // the open path reports it; a hover is not worth a warning
+            // the open path reports these; a hover is not worth a warning
+            Err(RpcError::Offline(_) | RpcError::Auth(_) | RpcError::Unreachable(_)) => {}
             Err(e) => log::warn!("prefetch: {rel} failed: {e}"),
         }
         let mut st = self.state.lock().unwrap();

@@ -6,6 +6,48 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
+### Fixed
+
+- A failed first connection (an expired session or no network at login) no
+  longer poisons every retry with `already initialised`: the shared crypto
+  endpoint is released when a connection attempt fails or is disposed, so the
+  engine now also recovers from an offline boot once the network returns.
+- An expired session at startup no longer spins in a retry loop (or exits and
+  restarts under systemd). The engine stays up in `auth-required`, shows
+  "Sign in required" in the tray, and reconnects when you run
+  `phnx-drive-sync login`, `systemctl --user reload phnx-drive-sync.service`
+  or *Sync now* (plus a slow quiet recheck, `PHNX_DRIVE_SYNC_AUTH_RECHECK_MS`).
+  "Invalid access token" and 401/403 statuses anywhere in an error's cause chain
+  are now recognised as authentication failures.
+- Opening an online-only file no longer hangs while the engine has no usable
+  connection: it fails at once with `ENOTCONN` (not connected yet) or `EACCES`
+  (sign-in needed), waits for the initial pass at most
+  `PHNX_DRIVE_SYNC_HYDRATE_WAIT_MS`, and a download that stops making progress
+  ends with `ETIMEDOUT` after `PHNX_DRIVE_SYNC_HYDRATE_STALL_MS`. In-flight
+  recall downloads are cancelled when the network drops, the engine stops, or
+  the session is lost during startup or the initial pass (`pin` downloads are
+  only bounded by the stall timeout).
+- A `401` where the stored session is still present (a transient token-refresh
+  failure) and a locked or missing `pass` store are retried with backoff instead
+  of asking you to sign in. A per-file authentication error in the initial pass
+  no longer parks the whole engine.
+- Timer settings above 2^31-1 ms are clamped instead of firing immediately.
+
+### Changed
+
+- SIGHUP now reloads (retries the remote connection) instead of terminating the
+  engine; the systemd unit gains `ExecReload`.
+- `once` exits 1 (was 3) when init fails for a reason that is neither
+  authentication nor network, such as a locked keyring; the README is corrected
+  to match (auth at init still exits 3).
+
+### Added
+
+- `phnx-drive-sync login` tells a running engine to reconnect with the new
+  session; `systemctl --user reload` (SIGHUP) does the same.
+
 ## [0.6.1] - 2026-10-20
 
 ### Fixed
@@ -156,7 +198,8 @@ First public release.
 - `package.json` is no longer private and uses the vendored TypeScript for
   `typecheck`.
 
-[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.4.0...v0.5.0

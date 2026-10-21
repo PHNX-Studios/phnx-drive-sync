@@ -29,6 +29,8 @@ export interface PassStats {
     errors: number;
     lastError: string | null;
     authFailed: boolean;
+    /** The remote scan itself was refused (as opposed to one file's transfer). */
+    scanAuthFailed: boolean;
 }
 
 const totals = { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, errors: 0 };
@@ -661,7 +663,7 @@ export async function execute(
 export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Promise<PassStats> {
     const dry = opts.dry === true;
     const t0 = Date.now();
-    const s: PassStats = { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, adopts: 0, errors: 0, lastError: null, authFailed: false };
+    const s: PassStats = { uploads: 0, downloads: 0, deletes: 0, renames: 0, conflicts: 0, adopts: 0, errors: 0, lastError: null, authFailed: false, scanAuthFailed: false };
 
     if (!dry) setStatus({ progress: { current: 'Scanning for changes', done: 0, total: 0 } });
 
@@ -684,6 +686,7 @@ export async function runPass(opts: { forceFull: boolean; dry?: boolean }): Prom
         s.lastError = remote.errMsg(e);
         if (remote.isAuthError(e)) {
             s.authFailed = true;
+            s.scanAuthFailed = true;
             setStatus({ state: 'auth-required', lastError: s.lastError, progress: null });
             log('ERROR', `auth failure during remote scan: ${s.lastError}`);
             return s;

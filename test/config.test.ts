@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { watcherPollMs } from '../src/config';
+import {
+    authRecheckMs,
+    hydrateReadyWaitMs,
+    hydrateStallMs,
+    MAX_TIMER_MS,
+    reconnectInitMaxMs,
+    reconnectInitMinMs,
+    watcherPollMs,
+} from '../src/config';
 
 const NEW = 'PHNX_DRIVE_SYNC_POLL_MS';
 const LEGACY = 'DRIVE_SYNC_POLL_MS';
@@ -58,5 +66,21 @@ describe('env aliases (PHNX_DRIVE_SYNC_* canonical, DRIVE_SYNC_* legacy)', () =>
         process.env[LEGACY] = '45000';
         process.env[NEW] = '7000';
         expect(watcherPollMs()).toBe(7_000);
+    });
+});
+
+describe('timer-fed knobs are clamped to the setTimeout limit', () => {
+    const names = ['HYDRATE_STALL_MS', 'HYDRATE_WAIT_MS', 'AUTH_RECHECK_MS', 'RECONNECT_MIN_MS', 'RECONNECT_MAX_MS'];
+    afterEach(() => {
+        for (const n of names) delete process.env[`PHNX_DRIVE_SYNC_${n}`];
+    });
+
+    test('values above 2^31-1 ms do not overflow into a 1 ms timer', () => {
+        for (const n of names) process.env[`PHNX_DRIVE_SYNC_${n}`] = '99999999999';
+        expect(hydrateStallMs()).toBe(MAX_TIMER_MS);
+        expect(hydrateReadyWaitMs()).toBe(MAX_TIMER_MS);
+        expect(authRecheckMs()).toBe(MAX_TIMER_MS);
+        expect(reconnectInitMinMs()).toBe(MAX_TIMER_MS);
+        expect(reconnectInitMaxMs()).toBe(MAX_TIMER_MS);
     });
 });

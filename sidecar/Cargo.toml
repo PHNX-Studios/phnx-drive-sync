@@ -1,6 +1,6 @@
 [package]
 name = "phnx-drive-sync-fuse"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 description = "FUSE sidecar for PHNX Drive Sync: files-on-demand mount over the sync tree"

@@ -3,16 +3,18 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import path from 'node:path';
 
 import { appRoot } from './approot';
-import { legacyShareDir, legacyStateDir, lockFile, localRoot, prefetchDefault, reconnectInitMaxMs, reconnectInitMinMs, shareDir, shutdownGraceMs, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
-import { isOffline, reportNetworkError, reportSuccess, sdkPaused, sdkResumed, setOffline, startMonitor, stopMonitor } from './connectivity';
+import { authRecheckMs, hydrateStallMs, legacyShareDir, legacyStateDir, lockFile, localRoot, prefetchDefault, reconnectInitMaxMs, reconnectInitMinMs, shareDir, shutdownGraceMs, stateDir, statusFile, treeRoot, watcherDebounceMs, watcherMaxDebounceMs, watcherPollMs } from './config';
+import { connectAndSync, connectRemote, createWaker, type ConnectDeps } from './boot';
+import { isOffline, onOfflineEdge, reportNetworkError, reportSuccess, sdkPaused, sdkResumed, setOffline, startMonitor, stopMonitor } from './connectivity';
 import { kickEmblems, syncEmblemsOnce } from './emblems';
 import { evictAll, evictSummary, fmtBytes, maybeAutoEvict, notify } from './evict';
 import { loadFilters } from './filters';
+import { RemoteGate } from './gate';
 import { bumpRevision, log, setStatus, status } from './log';
 import { isMountPoint, monitorMount, mountOkPath, startMount, stopMount } from './mount';
 import * as remote from './remote';
-import { OfflineError } from './remote';
-import { rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc';
+import { AuthRequiredError, OfflineError } from './remote';
+import { requestReload, rpcClient, startRpcServer, stopRpcServer, type PinResult } from './rpc';
 import { waitForPassEnd } from './shutdown';
 import * as st from './state';
 import { fileEq, requestStop, runPass, steady } from './sync';
@@ -103,7 +105,7 @@ async function main(): Promise<void> {
         return;
     }
     if (mode === 'login') {
-        process.exitCode = login();
+        process.exitCode = await login();
         return;
     }
     if (mode === 'restart') {
@@ -252,6 +254,12 @@ function parentRel(p: string): string {
 }
 
 const hydrating = new Map<string, Promise<void>>();
+/** In-flight hydrate downloads, so a session loss / going offline / shutdown can cut them loose. */
+const hydrateAborts = new Map<string, AbortController>();
+
+function abortHydrates(reason: Error): void {
+    for (const ac of [...hydrateAborts.values()]) ac.abort(reason);
+}
 
 /** Materialize a placeholder (sidecar open blocks on this): download + clear marker. */
 function hydrateOne(p: string): Promise<void> {
@@ -271,13 +279,24 @@ function hydrateOne(p: string): Promise<void> {
         if (!row || row.type !== 'file' || row.uid === null || row.rsize === null || row.rmtime === null) {
             throw new Error(`missing baseline facts: ${p}`);
         }
+        const ac = new AbortController();
+        hydrateAborts.set(p, ac);
         try {
-            await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
+            await remote.downloadFileRemote({
+                uid: row.uid,
+                abs: absOf(p),
+                expectSize: row.rsize,
+                mtimeMs: row.rmtime,
+                signal: ac.signal,
+                stallMs: hydrateStallMs(),
+            });
         } catch (e) {
             // a black-holed link (probe still "up"): classify the real failure so
             // the *next* open fails fast too (auth is not a connectivity problem)
             if (!remote.isAuthError(e)) reportNetworkError(e);
             throw e;
+        } finally {
+            hydrateAborts.delete(p);
         }
         st.onlineDel(p); // keep the marker if the download failed (I5)
         reportSuccess();
@@ -485,7 +504,7 @@ async function pinFiles(reqs: string[]): Promise<PinResult[]> {
             continue;
         }
         try {
-            await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime });
+            await remote.downloadFileRemote({ uid: row.uid, abs: absOf(p), expectSize: row.rsize, mtimeMs: row.rmtime, stallMs: hydrateStallMs() });
             st.onlineDel(p); // keep the marker if the download failed (I5)
             st.pinnedSet(p); // keep-mark survives materialization; auto-evict must never free this
             reportSuccess();
@@ -525,11 +544,8 @@ async function daemon(): Promise<void> {
 
     // Initial-pass barrier + shutdown signals, declared here so the signal handlers
     // below can resolve them (unblocking handlers waiting on startup/retry).
-    let initialPassDone = false;
-    let initialPassResolve: () => void = () => {};
-    const initialPass = new Promise<void>((resolve) => {
-        initialPassResolve = resolve;
-    });
+    const gate = new RemoteGate();
+    const waker = createWaker();
     let stopInitResolve: () => void = () => {};
     const stopInit = new Promise<void>((resolve) => {
         stopInitResolve = resolve;
@@ -568,14 +584,38 @@ async function daemon(): Promise<void> {
         if (eventsStarted) remote.stopEventLoop();
         if (rpcStarted) stopRpcServer();
         requestStop();
-        // unblock any handler awaiting the initial pass, and abandon an in-flight
-        // initRemote attempt so shutdown never waits on a stuck connection
-        initialPassResolve();
+        // unblock any handler awaiting the initial pass or a download, wake a parked
+        // boot loop, and abandon an in-flight initRemote attempt so shutdown never
+        // waits on a stuck connection
+        gate.stop();
+        abortHydrates(new Error('engine is stopping'));
+        waker.wake();
         stopInitResolve();
         void drainAndStop();
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
+    // reload: retry the remote connection now (e.g. after `phnx-drive-sync login`).
+    // Once the initial pass is done the session is held in memory, so there is
+    // nothing to re-read (returns false: a restart is needed). Before that the wake
+    // is always sent, so a login that lands during the initial pass is not lost.
+    const reload = (via: string): boolean => {
+        if (stopping) return false;
+        if (gate.state === 'ready' && gate.initialPassDone) {
+            log('INFO', `${via}: engine already connected; restart it to pick up a new login`);
+            return false;
+        }
+        log('INFO', `${via}: retrying the connection to Proton Drive`);
+        waker.wake();
+        return true;
+    };
+    process.on('SIGHUP', () => reload('SIGHUP'));
+    syncNowHook = () => {
+        if (stopping) return;
+        log('INFO', 'SIGUSR1: sync now');
+        if (!gate.initialPassDone) reload('sync now');
+        else schedule(0);
+    };
 
     /**
      * Debounce a sync pass. Non-sliding callers coalesce (the first event wins);
@@ -621,7 +661,7 @@ async function daemon(): Promise<void> {
             // to .protonignore still takes effect on the pass it triggers
             loadFilters();
             const s = await runPass({ forceFull: false });
-            if (s.authFailed) log('ERROR', 'authentication required; will retry on the next change (re-login via the official proton-drive CLI if this persists)');
+            if (s.authFailed) log('ERROR', 'authentication required; will retry on the next change (run: phnx-drive-sync login if this persists)');
             else if (!s.errors) reportSuccess();
             maybeAutoEvict(new Set(hydrating.keys()));
             kickEmblems();
@@ -640,6 +680,7 @@ async function daemon(): Promise<void> {
 
     // Ensure at least one pass has *started and finished* after the call time.
     const ensureFresh = async (): Promise<void> => {
+        if (gate.state !== 'ready') throw new Error('not connected to Proton Drive');
         if (isOffline()) throw new Error('offline');
         const t0 = Date.now();
         schedule(0);
@@ -673,15 +714,17 @@ async function daemon(): Promise<void> {
     monitorMount();
 
     let ready = false;
-    let initWakeRequested = false;
     remote.onConnectivity({ paused: sdkPaused, resumed: sdkResumed });
+    // going offline cuts in-flight hydrates loose: they fail with ENETDOWN at once
+    // instead of riding out the SDK's retries (markers are kept, I5)
+    onOfflineEdge(() => abortHydrates(new OfflineError('offline: connection lost during download')));
     startMonitor(() => {
         // connectivity returned: wake the boot retry loop immediately, then (once
         // the daemon is live) reconcile with one forced full pass (safe: I5 keeps
         // every marker)
-        initWakeRequested = true;
         remote.requestForceFull();
         if (ready) schedule(0);
+        else waker.wake();
     });
 
     // shutdown requested while bringing the mount up: skip the initial walk
@@ -691,24 +734,12 @@ async function daemon(): Promise<void> {
         return;
     }
 
-    // Preserves the pre-existing "an operation that races the initial pass waits
-    // for it" semantics now that the RPC socket opens during startup. Offline is
-    // handled per-op (each op has its own offline behaviour) and a shutting-down
-    // engine refuses to start new work (shutdown resolves `initialPass` to unblock
-    // waiters, so the post-await `stopping` check is essential).
-    const readyForOp = async (): Promise<void> => {
-        if (stopping) throw new Error('engine is stopping');
-        if (initialPassDone || isOffline()) return;
-        await initialPass;
-        if (stopping) throw new Error('engine is stopping');
-    };
-
     let rpcStartedLocal = false;
     const startRpc = (): void => {
         if (rpcStartedLocal) return;
         startRpcServer({
             pin: async (paths) => {
-                await readyForOp();
+                await gate.readyForRemoteOp();
                 const results = await pinFiles(paths); // offline -> 'offline: needs internet' per file
                 afterRpc();
                 return results;
@@ -716,7 +747,7 @@ async function daemon(): Promise<void> {
             unpin: async (paths) => {
                 // freeing local bytes is a local op; offline still works for the
                 // files whose baseline is steady (dirty ones fail cleanly)
-                await readyForOp();
+                await gate.readyForLocalOp();
                 const results = await unpinFiles(paths, ensureFresh);
                 afterRpc();
                 return results;
@@ -724,8 +755,8 @@ async function daemon(): Promise<void> {
             evict: async (paths) => {
                 // evictAll re-verifies clean+steady itself, so the ensureFresh
                 // pass (which needs the network) is only needed while online
-                await readyForOp();
-                if (!isOffline()) {
+                await gate.readyForLocalOp();
+                if (gate.state === 'ready' && !isOffline()) {
                     // never free unsynced bytes: run/await a pass first (I4)
                     await ensureFresh();
                 }
@@ -765,21 +796,21 @@ async function daemon(): Promise<void> {
                 return [{ path: 'prefetch', ok: true, note: `now ${v}` }];
             },
             hydrate: async (paths) => {
-                await readyForOp();
+                await gate.readyForRemoteOp();
                 const p = paths[0];
                 await hydrateOne(p); // offline -> OfflineError -> ENETDOWN
                 afterRpc();
                 return [{ path: p, ok: true, note: 'hydrated' }];
             },
             mv: async (paths) => {
-                await readyForOp();
+                await gate.readyForRemoteOp();
                 const [from, to] = paths;
                 await mvPlaceholder(from, to); // offline -> OfflineError
                 afterRpc();
                 return [{ path: from, ok: true, note: `moved to ${to}` }];
             },
             trash: async (paths) => {
-                await readyForOp();
+                await gate.readyForRemoteOp();
                 const p = paths[0];
                 await trashPlaceholder(p); // offline -> OfflineError
                 afterRpc();
@@ -788,8 +819,14 @@ async function daemon(): Promise<void> {
             list: async (paths) => listDirStatus(paths[0]),
             sync: async () => {
                 // the GUI "Sync now": same as SIGUSR1, but without assuming systemd
-                schedule(0);
+                if (!gate.initialPassDone) reload('sync now');
+                else schedule(0);
                 return [{ path: 'sync', ok: true, note: 'scheduled' }];
+            },
+            reload: async () => {
+                // sent by `login`: a fresh init re-reads the keyring session
+                const note = reload('login') ? 'reconnecting' : 'restart-required';
+                return [{ path: 'reload', ok: true, note }];
             },
         });
         rpcStartedLocal = true;
@@ -797,66 +834,94 @@ async function daemon(): Promise<void> {
     };
     startRpc(); // available during init and offline so opens fast-fail with ENETDOWN
 
-    // connect to Proton Drive, retrying with backoff; never exit on connectivity
-    let initDelay = reconnectInitMinMs();
-    for (;;) {
-        if (stopping) {
-            stopMonitor();
-            await shutdownDone;
-            return;
-        }
-        try {
-            const attempt = remote.initRemote();
-            // a shutdown may abandon this attempt; swallow its eventual rejection
-            attempt.catch(() => {
-                /* abandoned on shutdown */
-            });
-            await Promise.race([attempt, stopInit]);
-            if (stopping) break;
-            reportSuccess();
-            break;
-        } catch (e) {
-            if (remote.isAuthError(e)) {
-                log('WARN', `authentication required (run: phnx-drive-sync login): ${remote.errMsg(e)}`);
-                setStatus({ state: 'auth-required', lastError: remote.errMsg(e) });
-            } else if (remote.isNetworkError(e)) {
-                log('WARN', `offline: cannot reach Proton Drive (retrying in ${Math.round(initDelay / 1000)}s): ${remote.errMsg(e)}`);
-                setOffline(true, 'boot');
-            } else {
-                // not a connectivity problem: retry without claiming to be offline
-                log('ERROR', `remote init failed (retrying): ${remote.errMsg(e)}`);
-            }
-            const deadline = Date.now() + initDelay;
-            initDelay = Math.min(reconnectInitMaxMs(), initDelay * 2);
-            while (!stopping && !initWakeRequested && Date.now() < deadline) {
-                await remote.sleep(Math.min(500, deadline - Date.now()));
-            }
-            if (initWakeRequested) {
-                // a connectivity edge woke us: retry promptly, not at the backoff ceiling
-                initWakeRequested = false;
-                initDelay = reconnectInitMinMs();
-            }
-        }
+    // connect to Proton Drive: back off on network failures, park (no timer retry)
+    // on a rejected session until login / reload / Sync now wakes us
+    const recheckMs = authRecheckMs();
+    const connectDeps: ConnectDeps = {
+        init: () => remote.initRemote(),
+        isStopping: () => stopping,
+        stopSignal: stopInit,
+        waitForWake: (ms) => waker.wait(ms),
+        minMs: reconnectInitMinMs(),
+        maxMs: reconnectInitMaxMs(),
+        authRecheckMs: recheckMs,
+        onAuth: (e) => parkForSignIn(remote.errMsg(e)),
+        onOffline: (e, retryMs) => {
+            gate.setState('connecting');
+            leaveAuthState(remote.errMsg(e));
+            log('WARN', `offline: cannot reach Proton Drive (retrying in ${Math.round(retryMs / 1000)}s): ${remote.errMsg(e)}`);
+            setOffline(true, 'boot');
+        },
+        onError: (e, retryMs) => {
+            // not a connectivity problem: retry without claiming to be offline
+            gate.setState('connecting');
+            leaveAuthState(remote.errMsg(e));
+            log('ERROR', `remote init failed (retrying in ${Math.round(retryMs / 1000)}s): ${remote.errMsg(e)}`);
+        },
+    };
+    // A retry that fails for another reason must not leave a stale "sign in" status.
+    function leaveAuthState(why: string): void {
+        if (status.state === 'auth-required') setStatus({ state: 'starting', lastError: why });
+    }
+    // The session was rejected: say so once, fail online-only opens at once
+    // (EACCES) and cut loose anything already downloading.
+    function parkForSignIn(why: string): void {
+        const err = new AuthRequiredError();
+        gate.setState('auth-required');
+        gate.fail(err);
+        abortHydrates(err);
+        log(
+            'WARN',
+            `authentication required: ${why}; waiting for a sign-in (run: phnx-drive-sync login)` +
+                (recheckMs > 0 ? `, rechecking every ${Math.round(recheckMs / 60_000)} min` : ''),
+        );
+        setStatus({ state: 'auth-required', lastError: why });
     }
 
-    if (stopping) {
+    const outcome = await connectAndSync({
+        connect: () => connectRemote(connectDeps),
+        isStopping: () => stopping,
+        onReady: () => {
+            gate.setState('ready');
+            reportSuccess();
+        },
+        pass: async () => {
+            log('INFO', 'initial full pass...');
+            passing = true;
+            lastPassStartedAt = Date.now();
+            setStatus({ state: 'passing', lastError: null });
+            try {
+                const s = await runPass({ forceFull: true });
+                if (s.authFailed && !s.scanAuthFailed) {
+                    // one file's transfer was refused: stays per-file, the engine keeps going
+                    log('WARN', `authentication error during the initial pass: ${s.lastError}`);
+                } else if (!s.authFailed && !s.errors) {
+                    reportSuccess();
+                }
+                return { scanAuthFailed: s.scanAuthFailed, lastError: s.lastError };
+            } finally {
+                passing = false;
+            }
+        },
+        onPassDone: () => gate.markPassDone(),
+        sessionKept: () => remote.sessionKept(),
+        // the session died between connecting and the first listing: wait for a
+        // sign-in, then connect and walk again (waiters are released with EACCES)
+        onAuth: (why) => parkForSignIn(why),
+        onTransient: (why, retryMs) => {
+            gate.setState('connecting');
+            leaveAuthState(why);
+            log('ERROR', `session refresh failed but the stored session is kept (retrying in ${Math.round(retryMs / 1000)}s): ${why}`);
+        },
+        waitForWake: (ms) => waker.wait(ms),
+        minMs: connectDeps.minMs,
+        maxMs: connectDeps.maxMs,
+        authRecheckMs: recheckMs,
+    });
+    if (outcome === 'stopped') {
         stopMonitor();
         await shutdownDone;
         return;
-    }
-
-    log('INFO', 'initial full pass...');
-    passing = true;
-    lastPassStartedAt = Date.now();
-    setStatus({ state: 'passing' });
-    try {
-        const s = await runPass({ forceFull: true });
-        if (s.authFailed) throw new Error(`initial sync failed: ${s.lastError}`);
-        if (!s.errors) reportSuccess();
-    } finally {
-        passing = false;
-        initialPassDone = true;
-        initialPassResolve();
     }
 
     // shutdown requested during the initial pass: do not start the pumps
@@ -873,11 +938,6 @@ async function daemon(): Promise<void> {
     log('INFO', 'initial pass done; starting event loop and watcher (no periodic full walk)');
 
 
-    syncNowHook = () => {
-        if (stopping) return;
-        log('INFO', 'SIGUSR1: sync now');
-        schedule(0);
-    };
     remote.startEventLoop(() => schedule(1000));
     eventsStarted = true;
     watch = startWatcher(() => schedule(watcherDebounceMs, true));
@@ -924,7 +984,7 @@ function usage(): string {
 }
 
 /** Sign in via the bundled official CLI (or a system `proton-drive` fallback). */
-function login(): number {
+async function login(): Promise<number> {
     // Proton requires a clear third-party disclosure when prompting for account
     // details (see vendor/README.md, "Product and legal requirements").
     console.error(
@@ -945,7 +1005,13 @@ function login(): number {
         console.error(`login failed: ${r.error.message}`);
         return 1;
     }
-    return r.status ?? 1;
+    if (r.status !== 0) return r.status ?? 1;
+    // tell a running engine to pick the new session up (it re-reads the keyring on
+    // its next connection attempt); no automatic restart
+    const outcome = await requestReload();
+    if (outcome === 'reconnecting') console.error('The engine was waiting for a sign-in and is reconnecting now.');
+    else console.error('If the engine was already running with an expired session, run: phnx-drive-sync restart');
+    return 0;
 }
 
 /**
