@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
 ### Fixed
 
 - A failed first connection (an expired session or no network at login) no
@@ -196,7 +198,8 @@ First public release.
 - `package.json` is no longer private and uses the vendored TypeScript for
   `typecheck`.
 
-[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/PHNX-Studios/phnx-drive-sync/compare/v0.4.0...v0.5.0
