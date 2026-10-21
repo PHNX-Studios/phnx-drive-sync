@@ -16,6 +16,9 @@ export function envAlias(suffix: string): string | undefined {
     return v !== undefined ? v : process.env[`DRIVE_SYNC_${suffix}`];
 }
 
+/** setTimeout fires immediately for delays above 2^31-1 ms, so every timer-fed knob is clamped to it. */
+export const MAX_TIMER_MS = 2_147_483_647;
+
 const stateHome = envAlias('HOME');
 const dataHome = process.env.XDG_DATA_HOME || path.join(homedir(), '.local', 'share');
 const stateBase = process.env.XDG_STATE_HOME || path.join(homedir(), '.local', 'state');
@@ -111,13 +114,41 @@ export function connectivityPollMs(): number {
 /** Boot reconnect backoff: first retry delay (ms) and ceiling (ms) while the API is unreachable. */
 export function reconnectInitMinMs(): number {
     const v = Number(envAlias('RECONNECT_MIN_MS') || 5000);
-    return Number.isFinite(v) && v > 0 ? v : 5000;
+    return Number.isFinite(v) && v > 0 ? Math.min(v, MAX_TIMER_MS) : 5000;
 }
 
 export function reconnectInitMaxMs(): number {
     const v = Number(envAlias('RECONNECT_MAX_MS') || 120_000);
     const min = reconnectInitMinMs();
-    return Number.isFinite(v) && v >= min ? v : Math.max(min, 120_000);
+    return Number.isFinite(v) && v >= min ? Math.min(v, MAX_TIMER_MS) : Math.max(min, 120_000);
+}
+
+/**
+ * A hydrate (placeholder download) that receives no bytes for this long (ms,
+ * default 60000) is aborted with ETIMEDOUT instead of hanging the open. 0 disables.
+ */
+export function hydrateStallMs(): number {
+    const v = Number(envAlias('HYDRATE_STALL_MS') || 60_000);
+    return Number.isFinite(v) && v > 0 ? Math.min(v, MAX_TIMER_MS) : 0;
+}
+
+/**
+ * How long an op that arrives while the initial pass is still running waits for
+ * it before failing with ENOTCONN (ms, default 120000).
+ */
+export function hydrateReadyWaitMs(): number {
+    const v = Number(envAlias('HYDRATE_WAIT_MS') || 120_000);
+    return Number.isFinite(v) && v >= 0 ? Math.min(v, MAX_TIMER_MS) : 120_000;
+}
+
+/**
+ * While waiting for the user to sign in, quietly re-read the credential store
+ * this often (ms, default 15 minutes) so a keyring that unlocks late recovers
+ * without a login. 0 disables the recheck (login / reload / Sync now only).
+ */
+export function authRecheckMs(): number {
+    const v = Number(envAlias('AUTH_RECHECK_MS') || 15 * 60_000);
+    return Number.isFinite(v) && v > 0 ? Math.min(v, MAX_TIMER_MS) : 0;
 }
 
 /** Minimum gap between dynamic offline transitions (ms). */

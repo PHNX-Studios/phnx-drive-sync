@@ -31,6 +31,12 @@ let offlineNotified = false;
 let upStreak = 0;
 let stopPoll: (() => void) | null = null;
 let onResume: (() => void) | null = null;
+let onOffline: (() => void) | null = null;
+
+/** Run `cb` on every online -> offline edge (the daemon aborts in-flight hydrates with it). */
+export function onOfflineEdge(cb: (() => void) | null): void {
+    onOffline = cb;
+}
 
 export function isOffline(): boolean {
     return offline;
@@ -59,6 +65,7 @@ export function setOffline(next: boolean, reason: OfflineReason): void {
     if (next) {
         log('WARN', `offline (${reason}): online-only files will fail fast until reconnect`);
         notifyOffline();
+        onOffline?.();
     } else {
         log('INFO', `back online (${reason}); resuming`);
         notifyOnline();
@@ -211,6 +218,7 @@ export function sdkResumed(): void {
 /** Test hook: reset module state between cases. */
 export function _resetForTest(): void {
     stopMonitor();
+    onOffline = null;
     offline = false;
     offlineSince = null;
     lastNotifyAt = 0;

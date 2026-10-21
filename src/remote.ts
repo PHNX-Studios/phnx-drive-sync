@@ -51,8 +51,45 @@ export function isNotFound(e: unknown): boolean {
     return /404|not[ _-]?found|missing|does not exist|no longer exist/i.test(errMsg(e));
 }
 
-export function isAuthError(e: unknown): boolean {
-    return /401|403|unauthorized|forbidden|session|refresh.?token|2fa|two.?factor|authentication|login required/i.test(errMsg(e));
+// "Failed to load session from secrets/pass": the keyring or gpg-agent is locked or
+// missing. That is transient (it can unlock later), not a rejected session.
+const KEYRING_UNAVAILABLE_RE = /failed to (load|save) session (from|in) (secrets|pass)/i;
+const AUTH_MESSAGE_RE =
+    /401|403|unauthorized|forbidden|session|refresh.?token|invalid (access|refresh) token|access token|not logged in|2fa|two.?factor|authentication|login required/i;
+
+function isAuthStatus(n: unknown): boolean {
+    return n === 401 || n === 403;
+}
+
+/**
+ * Classify a throwable as "the session is not usable": structural signals first
+ * (SDK `APIHTTPError.statusCode`, `APICodeError.code`, `AccountApiError.httpCode`,
+ * an HTTP `response.status`, the `cause` chain), then the message wording.
+ */
+export function isAuthError(e: unknown, depth = 0): boolean {
+    if (e instanceof AuthRequiredError) return true;
+    // checked before any structural/cause signal: these are never a rejected session
+    if (e instanceof SessionKeptError || KEYRING_UNAVAILABLE_RE.test(errMsg(e))) return false;
+    if (e && typeof e === 'object') {
+        const o = e as {
+            name?: unknown;
+            statusCode?: unknown;
+            httpCode?: unknown;
+            code?: unknown;
+            response?: { status?: unknown } | null;
+            cause?: unknown;
+        };
+        if (o.name === 'AuthRequiredError') return true;
+        if (isAuthStatus(o.statusCode) || isAuthStatus(o.httpCode) || isAuthStatus(o.code)) return true;
+        if (isAuthStatus(o.response?.status)) return true;
+        if (o.cause !== undefined && depth < 4 && isAuthError(o.cause, depth + 1)) return true;
+    }
+    return AUTH_MESSAGE_RE.test(errMsg(e));
+}
+
+/** The credential store still holds a session (so an auth-looking failure was a transient refresh problem). */
+export function sessionKept(): boolean {
+    return app?.auth?.isLoggedIn?.() === true;
 }
 
 export function isAbortError(e: unknown): boolean {
@@ -76,6 +113,39 @@ export class OfflineError extends Error {
 
 export function isOfflineError(e: unknown): boolean {
     return e instanceof OfflineError || (e instanceof Error && e.name === 'OfflineError');
+}
+
+/** The remote session is missing or rejected; carries `code:'auth'` over RPC (sidecar: EACCES). */
+export class AuthRequiredError extends Error {
+    name = 'AuthRequiredError';
+    constructor(message = 'authentication required - run: phnx-drive-sync login') {
+        super(message);
+    }
+}
+
+/**
+ * The server answered 401 but the stored session is still there: the SDK only signs
+ * out when a token refresh is refused with a 4xx (not 429/5xx), so this is a
+ * transient refresh failure and must be retried, not reported as "sign in".
+ */
+export class SessionKeptError extends Error {
+    name = 'SessionKeptError';
+}
+
+/** The engine is up but has no remote connection yet; `code:'unavailable'` (sidecar: ENOTCONN). */
+export class RemoteUnavailableError extends Error {
+    name = 'RemoteUnavailableError';
+    constructor(message = 'engine is not connected to Proton Drive yet') {
+        super(message);
+    }
+}
+
+/** A download made no progress for too long; `code:'timeout'` (sidecar: ETIMEDOUT). */
+export class HydrateTimeoutError extends Error {
+    name = 'HydrateTimeoutError';
+    constructor(message = 'download stalled') {
+        super(message);
+    }
 }
 
 function isTransientTransportError(message: string | undefined): boolean {
@@ -232,6 +302,8 @@ async function resetRemote(): Promise<void> {
     const previous = app;
     app = null;
     sdk = null;
+    remoteRootUid = '';
+    eventScope = '';
     if (!previous) return;
     try {
         await Promise.race([previous.dispose(), sleep(2000)]);
@@ -240,9 +312,39 @@ async function resetRemote(): Promise<void> {
     }
 }
 
+let initImpl: typeof init = init;
+let shutDown = false;
+
+/** Test seam: swap the vendor `init` (no keyring/network) and restore it with no argument. */
+export function _setInitForTest(fn?: typeof init): void {
+    initImpl = fn ?? init;
+    shutDown = false;
+}
+
+/**
+ * Connect to Proton Drive. Every attempt starts from scratch and a failed one
+ * tears itself down (app handle, crypto endpoint, event loop), so a retry after
+ * an auth or network failure sees the same clean state as the first boot.
+ */
 export async function initRemote(): Promise<void> {
+    if (shutDown) throw new Error('engine is stopping');
     await resetRemote(); // clean up a previous partial attempt before retrying
-    app = await init({
+    try {
+        await connectApp();
+    } catch (e) {
+        let err = e;
+        if (isAuthError(e) && sessionKept()) {
+            err = new SessionKeptError(`session refresh failed but the stored session is kept (will retry): ${errMsg(e)}`, {
+                cause: e,
+            });
+        }
+        await resetRemote();
+        throw err;
+    }
+}
+
+async function connectApp(): Promise<void> {
+    const created = await initImpl({
         appVersion: APP_VERSION,
         clientUidPrefix: CLIENT_UID_PREFIX,
         enablePersistedEvents: false,
@@ -250,6 +352,9 @@ export async function initRemote(): Promise<void> {
         enableMetrics: false,
         flags: { [FeatureFlags.DriveSmallFileUpload]: true },
     });
+    app = created;
+    // shutdown abandoned this attempt while it was in flight: do not leave a live app behind
+    if (shutDown) throw new Error('engine is stopping');
     sdk = app.sdk;
     subscribeSdkEvents(sdk);
     const root = await app.sdk.getMyFilesRootFolder();
@@ -321,6 +426,7 @@ async function resolveChildFolder(parentUid: string, name: string): Promise<stri
 }
 
 export async function shutdownRemote(): Promise<void> {
+    shutDown = true;
     stopEventLoop();
     if (app) {
         const disposing = app.dispose();
@@ -645,6 +751,10 @@ export async function downloadFileRemote(o: {
     abs: string;
     expectSize: number | null;
     mtimeMs: number;
+    /** Aborts the download; the abort reason (if an Error) is what the caller sees. */
+    signal?: AbortSignal;
+    /** Give up when no bytes arrive for this long (0/undefined: never). */
+    stallMs?: number;
 }): Promise<void> {
     mkdirSync(path.dirname(o.abs), { recursive: true });
     const tmp = o.abs + partialSuffix;
@@ -681,10 +791,30 @@ export async function downloadFileRemote(o: {
             }
         },
     });
+    const abort = new AbortController();
+    const onExternalAbort = () => abort.abort(o.signal?.reason);
+    if (o.signal?.aborted) onExternalAbort();
+    else o.signal?.addEventListener('abort', onExternalAbort, { once: true });
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+    const armStall = () => {
+        if (stallTimer) clearTimeout(stallTimer);
+        if (!o.stallMs || o.stallMs <= 0) return;
+        stallTimer = setTimeout(() => {
+            abort.abort(new HydrateTimeoutError(`download stalled: no data for ${Math.round(o.stallMs! / 1000)}s`));
+        }, o.stallMs);
+    };
     try {
-        const downloader = await requireSdk().getFileDownloader(o.uid);
-        const ctrl = downloader.downloadToStream(ws);
+        armStall();
+        // the SDK's own signal aborts the transfer for real (no orphaned download
+        // finishing later); progress re-arms the stall timer
+        const downloader = await requireSdk().getFileDownloader(o.uid, abort.signal);
+        const ctrl = downloader.downloadToStream(ws, armStall);
         await ctrl.completion();
+        // bytes are complete: from here to the rename nothing may abort (I5), and
+        // everything up to `return` is synchronous
+        if (stallTimer) clearTimeout(stallTimer);
+        stallTimer = null;
+        o.signal?.removeEventListener('abort', onExternalAbort);
         if (ctrl.isDownloadCompleteWithSignatureIssues()) throw new Error('download completed with signature issues');
         endSink();
         const size = statSync(tmp).size;
@@ -694,12 +824,17 @@ export async function downloadFileRemote(o: {
         renameSync(tmp, o.abs);
         utimesSync(o.abs, new Date(o.mtimeMs), new Date(o.mtimeMs));
     } catch (e) {
+        endSink();
         try {
             if (existsSync(tmp)) unlinkSync(tmp);
         } catch {
             /* ignore */
         }
-        throw e;
+        const reason: unknown = abort.signal.aborted ? abort.signal.reason : undefined;
+        throw reason instanceof Error ? reason : e;
+    } finally {
+        if (stallTimer) clearTimeout(stallTimer);
+        o.signal?.removeEventListener('abort', onExternalAbort);
     }
 }
 

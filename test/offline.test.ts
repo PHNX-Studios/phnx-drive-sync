@@ -20,6 +20,7 @@ function stubHandlers(over: Partial<RpcHandlers> = {}): RpcHandlers {
         prefetch: ok,
         list: async () => [],
         sync: ok,
+        reload: ok,
         ...over,
     };
 }

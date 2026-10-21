@@ -218,11 +218,11 @@ def fetch_state():
         detail = f"Sync service failed (exit {run.get('ExecMainStatus') or '?'}) - check log"
     elif not active:
         if engine == "auth-required":
-            state, detail = "error", "Authentication required - run: proton-drive"
+            state, detail = "error", "Sign in required - run: phnx-drive-sync login"
         else:
             state, detail = "paused", f"Paused - last sync {last_rel}"
     elif engine == "auth-required":
-        state, detail = "error", "Authentication required - run: proton-drive"
+        state, detail = "error", "Sign in required - run: phnx-drive-sync login"
     elif engine in ("running", "idle", "stopped", "starting", ""):
         if status.get("lastError") and engine == "running":
             state, detail = "error", f"Last sync error: {status['lastError']}"

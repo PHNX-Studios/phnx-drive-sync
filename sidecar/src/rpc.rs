@@ -24,6 +24,8 @@ pub enum RpcError {
     Unreachable(String),
     /// The engine session is invalid; never fall back to a local op.
     Auth(String),
+    /// The engine gave up waiting on the network (a stalled download).
+    TimedOut(String),
     /// Any other engine-reported failure.
     Failed(String),
 }
@@ -36,11 +38,12 @@ impl RpcError {
             RpcError::Offline(_) => Errno::from_i32(libc::ENETDOWN),
             RpcError::Unreachable(_) => Errno::from_i32(libc::ENOTCONN),
             RpcError::Auth(_) => Errno::EACCES,
+            RpcError::TimedOut(_) => Errno::from_i32(libc::ETIMEDOUT),
             RpcError::Failed(_) => Errno::EIO,
         }
     }
 
-    /// Offline / unreachable / auth: conditions where a local fallback is wrong.
+    /// Offline / unreachable / auth / timed out: conditions where a local fallback is wrong.
     pub fn is_transport(&self) -> bool {
         !matches!(self, RpcError::Failed(_))
     }
@@ -52,6 +55,7 @@ impl std::fmt::Display for RpcError {
             RpcError::Offline(m)
             | RpcError::Unreachable(m)
             | RpcError::Auth(m)
+            | RpcError::TimedOut(m)
             | RpcError::Failed(m) => f.write_str(m),
         }
     }
@@ -133,6 +137,9 @@ impl Rpc {
         Err(match resp["code"].as_str() {
             Some("offline") => RpcError::Offline(msg("offline")),
             Some("auth") => RpcError::Auth(msg("authentication required")),
+            // the engine is up but has no session/remote yet (still connecting)
+            Some("unavailable") => RpcError::Unreachable(msg("engine is not connected yet")),
+            Some("timeout") => RpcError::TimedOut(msg("download stalled")),
             _ => RpcError::Failed(msg(&format!("{op} failed"))),
         })
     }
@@ -223,6 +230,14 @@ mod tests {
                 libc::EACCES,
             ),
             (
+                "{\"ok\":false,\"code\":\"unavailable\",\"error\":\"connecting\"}\n",
+                libc::ENOTCONN,
+            ),
+            (
+                "{\"ok\":false,\"code\":\"timeout\",\"error\":\"stalled\"}\n",
+                libc::ETIMEDOUT,
+            ),
+            (
                 "{\"ok\":false,\"error\":\"missing baseline facts\"}\n",
                 libc::EIO,
             ),
@@ -231,6 +246,13 @@ mod tests {
             let err = client(&dir).call("hydrate", &["a"]).unwrap_err();
             assert_eq!(err.errno().code(), errno, "{reply}");
         }
+    }
+
+    #[test]
+    fn timeout_is_a_transport_error() {
+        // a stalled hydrate must never let an mv fall back to a local rename
+        assert!(RpcError::TimedOut("x".into()).is_transport());
+        assert!(!RpcError::Failed("x".into()).is_transport());
     }
 
     #[test]

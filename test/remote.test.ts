@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 
-import { isAuthError, isNetworkError, isNotFound, isOfflineError, OfflineError } from '../src/remote';
+import { APICodeError, APIHTTPError } from '@protontech/drive-sdk/internal/apiService/errors';
+
+import { AuthRequiredError, isAuthError, isNetworkError, isNotFound, isOfflineError, OfflineError } from '../src/remote';
+import { AccountApiError } from '../vendor/incubating/account/js/src/accountApi';
 
 /** Minimal Error with a chosen `name` (mirrors how the SDK/HTTP stack throws). */
 function named(name: string, message = '', extra: { code?: string } = {}): Error {
@@ -77,5 +80,49 @@ describe('OfflineError', () => {
         // a plain Error wearing the name still classifies (cross-realm safety)
         expect(isOfflineError(named('OfflineError'))).toBe(true);
         expect(isOfflineError(new Error('nope'))).toBe(false);
+    });
+});
+
+describe('isAuthError structural checks', () => {
+    test('SDK and account API errors carrying a 401/403', () => {
+        expect(isAuthError(new APICodeError('Invalid access token', 401))).toBe(true);
+        expect(isAuthError(new APIHTTPError('denied', 403))).toBe(true);
+        expect(isAuthError(new APIHTTPError('Unauthorized', 401))).toBe(true);
+        expect(isAuthError(new AccountApiError('nope', { httpCode: 401 }))).toBe(true);
+        expect(isAuthError(Object.assign(new Error('x'), { response: { status: 401 } }))).toBe(true);
+    });
+
+    test('the status is found through the cause chain', () => {
+        const inner = new APIHTTPError('x', 401);
+        expect(isAuthError(new Error('wrapper', { cause: new Error('middle', { cause: inner }) }))).toBe(true);
+    });
+
+    test('wording alone is enough for the common refusals', () => {
+        expect(isAuthError(new Error('Invalid access token'))).toBe(true);
+        expect(isAuthError(new Error('invalid refresh token'))).toBe(true);
+        expect(isAuthError(new Error('Not logged in'))).toBe(true);
+        expect(isAuthError(new AuthRequiredError())).toBe(true);
+        expect(isAuthError(Object.assign(new Error('You need to login first'), { name: 'AuthRequiredError' }))).toBe(true);
+    });
+
+    test('other statuses and ordinary failures are not auth', () => {
+        expect(isAuthError(new APIHTTPError('server on fire', 500))).toBe(false);
+        expect(isAuthError(new APICodeError('conflict', 2500))).toBe(false);
+        expect(isAuthError(new Error('boom'))).toBe(false);
+    });
+
+    test('an unavailable keyring is transient, not a rejected session', () => {
+        expect(
+            isAuthError(new Error('Failed to load session from secrets (ensure you have secrets available): locked')),
+        ).toBe(false);
+        expect(isAuthError(new Error('Failed to load session from pass (ensure pass is installed): nope'))).toBe(false);
+        expect(isAuthError(new Error('Failed to load session in pass: gpg: decryption failed'))).toBe(false);
+        expect(isAuthError(new Error('Failed to save session in pass: nope'))).toBe(false);
+    });
+
+    test('the keyring carve-out wins over a structural or cause signal', () => {
+        const keyring = new Error('Failed to load session from secrets: locked', { cause: new APIHTTPError('x', 401) });
+        expect(isAuthError(keyring)).toBe(false);
+        expect(isAuthError(Object.assign(new Error('Failed to load session in pass: x'), { statusCode: 401 }))).toBe(false);
     });
 });

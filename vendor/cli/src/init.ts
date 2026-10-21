@@ -17,6 +17,17 @@ import { Manager, NoEventsProvider, PersistedEventsProvider } from './events';
 import { disableSentry, initTelemetry } from './telemetry';
 
 export async function init(configOptions: InitConfig) {
+    try {
+        return await initUnguarded(configOptions);
+    } catch (e) {
+        // drive-sync: a failed init (expired session, offline) must not leave the
+        // process-wide crypto endpoint claimed, or every retry throws "already initialised"
+        await releaseOpenPGPCryptoModule();
+        throw e;
+    }
+}
+
+async function initUnguarded(configOptions: InitConfig) {
     const config = getConfig(configOptions);
     await Promise.all([
         mkdir(config.cacheDir, { recursive: true }),
@@ -29,7 +40,8 @@ export async function init(configOptions: InitConfig) {
 
     logger.info(`Version: CLI=${configOptions.appVersion}, SDK=${configOptions.sdkVersion ?? 'unknown'}`);
 
-    const openPGPCryptoModule = initOpenPGPCryptoModule();
+    const openPGPCryptoModule = await initOpenPGPCryptoModule();
+    const cryptoGeneration = endpointGeneration;
     const credentials = initCredentials(config, logger);
     const { auth, addresses, srp, httpClient, apiClient } = await initApi(config, credentials, logger, CryptoProxy);
 
@@ -92,6 +104,9 @@ export async function init(configOptions: InitConfig) {
         metrics,
         dispose: async () => {
             await Promise.all([flushTelemetry(), eventsManager.dispose()]);
+            // drive-sync: free the process-wide crypto endpoint so the next init() can claim it
+            // (skipped when a newer init() already replaced it; a late dispose must not pull it away)
+            if (cryptoGeneration === endpointGeneration) await releaseOpenPGPCryptoModule();
         },
         clearCaches: async () => {
             logger.debug('Clearing caches');
@@ -100,10 +115,25 @@ export async function init(configOptions: InitConfig) {
     };
 }
 
-function initOpenPGPCryptoModule() {
+// drive-sync: idempotent (the proxy endpoint is a process-wide singleton and the
+// engine re-runs init() on every boot retry), and exported for tests.
+let endpointGeneration = 0;
+
+export async function initOpenPGPCryptoModule() {
+    await releaseOpenPGPCryptoModule();
+    endpointGeneration++;
     CryptoApi.init({});
     CryptoProxy.setEndpoint(new CryptoApi(), (endpoint) => endpoint.clearKeyStore());
     return new OpenPGPCryptoWithCryptoProxy(CryptoProxy);
+}
+
+/** drive-sync: release the crypto endpoint if one is set (releaseEndpoint throws when unset). */
+export async function releaseOpenPGPCryptoModule(): Promise<void> {
+    try {
+        await CryptoProxy.releaseEndpoint();
+    } catch {
+        /* no endpoint set */
+    }
 }
 
 class FeatureFlagProvider {
