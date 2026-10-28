@@ -24,7 +24,7 @@ jobs:
 
       # Markdown docs via `.markdownlint-cli2.jsonc`; pinned for reproducible
       # results. Globs are explicit so the vendored SDK docs are not linted.
-      - uses: DavidAnson/markdownlint-cli2-action@v24
+      - uses: DavidAnson/markdownlint-cli2-action@v25
         with:
           globs: |
             *.md
