@@ -11,7 +11,7 @@ fuser = { version = "0.18", default-features = false }
 libc = "0.2"
 lexopt = "0.3"
 log = "0.4"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 serde_json = "1"
 sha1 = "0.11"
 signal-hook = "0.4"
