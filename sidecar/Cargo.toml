@@ -7,7 +7,7 @@ description = "FUSE sidecar for PHNX Drive Sync: files-on-demand mount over the 
 publish = false
 
 [dependencies]
-fuser = { version = "0.18", default-features = false }
+fuser = { version = "0.19", default-features = false }
 libc = "0.2"
 lexopt = "0.3"
 log = "0.4"
